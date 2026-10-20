@@ -18,6 +18,7 @@ Requires PI-Desktop `>= 0.21.0`. The next-message suggestion additionally needs
 the host's composer suggestion channel (`composer.suggest`); on a build without
 it the settings window says so and the capability stays inert rather than
 spending a completion it could not show.
+
 | Capability | Where it shows | Switch |
 |---|---|---|
 | Next-message suggestion | The message you are likely to send next, shown in the composer placeholder after a turn ends; <kbd>Tab</kbd> accepts it | `predictionsEnabled` |
