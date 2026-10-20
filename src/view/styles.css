@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+/*
+ * The view inherits the host's light/dark appearance through `data-base` on
+ * `<html>`, which `appearance.js` maintains.
+ *
+ * The page does not use `dark:` variants: within one layer a plain class and
+ * its `dark:` counterpart have equal specificity, so whether the dark value wins
+ * would depend on emission order. Instead every surface reads a semantic token
+ * (`surface`, `ink`, `line`) whose value the theme block below redefines, so one
+ * class list is correct in both appearances by construction.
+ */
+@theme inline {
+  --color-surface: var(--oe-surface);
+  --color-surface-sunken: var(--oe-surface-sunken);
+  --color-ink: var(--oe-ink);
+  --color-ink-muted: var(--oe-ink-muted);
+  --color-ink-faint: var(--oe-ink-faint);
+  --color-line: var(--oe-line);
+  --color-accent: var(--oe-accent);
+  --color-accent-ink: var(--oe-accent-ink);
+  --color-ok: var(--oe-ok);
+  --color-warn: var(--oe-warn);
+  --color-danger: var(--oe-danger);
+}
+
+:root {
+  --oe-surface: #ffffff;
+  --oe-surface-sunken: #fafafa;
+  --oe-ink: #18181b;
+  --oe-ink-muted: #52525b;
+  --oe-ink-faint: #a1a1aa;
+  --oe-line: rgba(0, 0, 0, 0.1);
+  --oe-accent: #18181b;
+  --oe-accent-ink: #ffffff;
+  --oe-ok: #059669;
+  --oe-warn: #b45309;
+  --oe-danger: #dc2626;
+}
+
+:root[data-base="dark"] {
+  --oe-surface: rgba(255, 255, 255, 0.04);
+  --oe-surface-sunken: rgba(255, 255, 255, 0.06);
+  --oe-ink: #fafafa;
+  --oe-ink-muted: #d4d4d8;
+  --oe-ink-faint: #a1a1aa;
+  --oe-line: rgba(255, 255, 255, 0.1);
+  --oe-accent: #fafafa;
+  --oe-accent-ink: #18181b;
+  --oe-ok: #34d399;
+  --oe-warn: #fbbf24;
+  --oe-danger: #f87171;
+}

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "pi.official-enhancements",
+  "name": "Official Enhancements",
+  "version": "0.5.0",
+  "description": "Four bundled enhancements: a next-message suggestion shown in the composer after each turn, prompt enhancement, session titles, and a changed-files card after each reply. Every capability starts on, each has an editable instruction prompt, and its own settings window is the only place to configure it.",
+  "author": "PI-Desktop",
+  "main": "main.js",
+  "ui": {
+    "panel": "views/index.html",
+    "title": { "en": "Enhancements", "zh-CN": "增强设置" },
+    "width": 520,
+    "height": 640
+  },
+  "renderer": "renderer/index.mjs",
+  "rendererActions": ["plugin.call"],
+  "rendererCallMethods": [
+    "enhancements.state",
+    "enhancements.saveSettings",
+    "enhancements.fileChanges"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "enhancements.openSettings",
+        "title": "Enhancements: Open Settings",
+        "keywords": ["enhancements", "prediction", "prompt", "增强", "预测", "设置"],
+        "category": "Enhancements"
+      }
+    ],
+    "composerTransforms": [
+      {
+        "id": "enhance",
+        "title": { "en": "Enhance prompt", "zh-CN": "增强提示词" },
+        "undoTitle": { "en": "Undo prompt enhancement", "zh-CN": "撤销提示词增强" }
+      }
+    ]
+  },
+  "permissions": [
+    "renderer.extension",
+    "ui.panel",
+    "composer.transform",
+    "models.list",
+    "agent.complete",
+    "session.read",
+    "session.autoTitle"
+  ],
+  "engines": {
+    "piDesktop": ">=0.21.0"
+  },
+  "activationEvents": ["onStartup", "onCommand:enhancements.openSettings"]
+}

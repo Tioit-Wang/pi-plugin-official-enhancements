@@ -1,0 +1,10 @@
+# `pi-plugin pack` output, including the packaged .piplug
+dist/
+*.piplug
+
+# Local tool installs
+node_modules/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
