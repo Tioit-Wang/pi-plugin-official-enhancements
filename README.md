@@ -55,13 +55,15 @@ Which model writes it, in order:
 
 1. **The model picked in the settings window**, while it is available.
 2. **The session's model** — the model this conversation will answer with
-   (`session.getLlmContext().modelKey`). This is the default.
+   (`session.getActive().modelKey`). This is the default.
 3. **The app default model** — only when the conversation has no model of its own.
 
 The data sent is the tail of the conversation (six messages, 400 characters
-each) and the reply is normalised to one line: labels, quotes and line breaks
-are stripped, and it is capped at 120 characters because a placeholder shows a
-single ellipsised line.
+each, read with `session.listMessages`) and the reply is normalised to one line:
+labels, quotes and line breaks are stripped, and it is capped at 120 characters
+because a placeholder shows a single ellipsised line. `session.getLlmContext` is
+deliberately unused: the host only serves it from inside one of the plugin's own
+tool calls, which a turn-end handler is not.
 
 A suggestion is skipped without spending a completion when the switch is off,
 the turn did not complete, the turn belongs to a session the user is not looking

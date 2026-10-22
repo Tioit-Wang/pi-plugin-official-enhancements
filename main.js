@@ -349,11 +349,17 @@ async function resolveCompletionModel(models, configuredKey) {
   };
 }
 
-/** The model the open conversation answers with, or "" when none is selected. */
+/**
+ * The model the open conversation answers with, or "" when none is selected.
+ *
+ * `session.getActive` rather than `session.getLlmContext`: the latter is only
+ * callable from inside one of the plugin's tool calls, and the settings window
+ * asks for this from the panel.
+ */
 async function readSessionModelKey() {
   try {
-    const context = await pi.session.getLlmContext();
-    return typeof context?.modelKey === "string" ? context.modelKey : "";
+    const active = await pi.session.getActive();
+    return typeof active?.modelKey === "string" ? active.modelKey : "";
   } catch {
     return "";
   }
@@ -462,6 +468,39 @@ function normalizeSuggestion(value) {
 }
 
 /**
+ * The conversation a suggestion is written from, or `null` when the user is not
+ * looking at that session.
+ *
+ * `session.getLlmContext` is only callable while one of the plugin's tools runs
+ * (`plugin-runtime.ts`, "session context is only available during tool
+ * execution"), so a turn-end handler cannot use it. `session.getActive` plus
+ * `session.listMessages` is the pair that works from a background handler, and
+ * it reads no more than the tail the suggestion needs.
+ */
+async function readSuggestionContext(sessionId) {
+  let active = null;
+  try {
+    active = await pi.session.getActive();
+  } catch {
+    return null;
+  }
+  if (!active || active.sessionId !== sessionId) return null;
+  let messages = [];
+  try {
+    const result = await pi.session.listMessages({
+      sessionId,
+      limit: SUGGESTION_EXCERPT_MESSAGES * 2,
+      order: "desc",
+      contentLimit: SUGGESTION_EXCERPT_MESSAGE_CHARS,
+    });
+    messages = Array.isArray(result?.messages) ? result.messages : [];
+  } catch {
+    return null;
+  }
+  return { sessionId, messages: messages.slice().reverse() };
+}
+
+/**
  * Propose the next user message for one completed turn.
  *
  * Skipped without spending a completion when the capability is off, the turn
@@ -483,10 +522,11 @@ async function generateTurnSuggestion(payload) {
   suggestedTurns.add(turnKey);
   if (suggestedTurns.size > 500) suggestedTurns.delete(suggestedTurns.values().next().value);
 
-  const context = await pi.session.getLlmContext();
-  // The host reports the session the user is looking at. A turn that ended
+  // The visible session, not the one the event names: the host refuses to
+  // address anything the user is not looking at, and a turn that ended
   // somewhere else is not a turn they are about to type an answer to.
-  if (!context || context.sessionId !== sessionId) return { shown: false, reason: "not-visible" };
+  const context = await readSuggestionContext(sessionId);
+  if (!context) return { shown: false, reason: "not-visible" };
 
   if (!takeCompletionSlot("suggestion", SUGGESTIONS_PER_MINUTE)) {
     return { shown: false, reason: "rate-limited" };

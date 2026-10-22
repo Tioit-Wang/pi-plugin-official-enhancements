@@ -131,16 +131,16 @@ globalThis.pi = {
     },
   },
   session: {
-    listMessages: async () => ({ messages }),
-    getLlmContext: async () => ({
-      sessionId: llmSessionId,
-      modelKey: sessionModelKey,
-      messages: [
-        { role: "user", content: "please refactor the composer" },
-        { role: "assistant", content: "Refactored the composer and added a preview." },
-      ],
-      truncated: false,
-    }),
+    /**
+     * The transcript the card and the suggestion read, newest first — the order
+     * the host returns for `order: "desc"`.
+     */
+    listMessages: async (input) =>
+      input?.order === "desc" ? { messages } : { messages: messages.slice().reverse() },
+    // The session the user is looking at. The plugin reads the tail through
+    // `listMessages`: `getLlmContext` is refused outside a tool call.
+    getActive: async () =>
+      llmSessionId ? { sessionId: llmSessionId, modelKey: sessionModelKey } : null,
     // The host answers null once the title is no longer a placeholder.
     getAutoTitleContext: async ({ sessionId }) => {
       autoTitleReads.push(sessionId);
