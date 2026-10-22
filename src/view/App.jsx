@@ -514,6 +514,16 @@ function App() {
             "This build of PI-Desktop has no composer suggestion channel yet, so a suggestion would be generated and then dropped. Everything else on this page still works.",
           )
         : null,
+      state.suggestionFailure
+        ? h(
+            "p",
+            {
+              className:
+                "rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-[11px] text-danger",
+            },
+            `The host refused the last suggestion (${state.suggestionFailure}). If it names a permission, reload the plugin folder so this version's grant can be confirmed.`,
+          )
+        : null,
       h(PromptEditor, {
         value: prompts?.predictionPrompt ?? "",
         onChange: (next) =>

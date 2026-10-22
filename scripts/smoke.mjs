@@ -287,6 +287,26 @@ assert.equal(suggestions.length, 1, "nothing is shown without a channel");
 assert.equal(completions.length, beforeUnsupported, "and no completion is spent");
 globalThis.pi.composer = savedComposer;
 
+// --- suggestion: a refused hand-off is reported -------------------------
+
+// The host confirms `composer.suggest` at install, so a plugin loaded before it
+// declared the permission is refused. That must reach the window rather than
+// look like a suggestion the model never produced.
+const refusingComposer = globalThis.pi.composer;
+globalThis.pi.composer = {
+  suggest: async () => {
+    throw Object.assign(new Error("permission denied"), { code: "PERMISSION_DENIED" });
+  },
+  clearSuggestion: async () => ({ ok: true }),
+};
+await fireTurnEnded({ sessionId: "s1", turnId: "t-refused", reason: "completed" });
+assert.equal(
+  (await plugin.onRendererCall("enhancements.state", {})).suggestionFailure,
+  "PERMISSION_DENIED",
+  "the window is told why the hand-off was refused",
+);
+globalThis.pi.composer = refusingComposer;
+
 // --- suggestion: which model answers ------------------------------------
 
 // The completion budget is a rolling minute and `onLoad` resets it, so each

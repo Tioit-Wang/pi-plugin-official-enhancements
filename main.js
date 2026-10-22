@@ -407,6 +407,12 @@ const SUGGESTION_TTL_MS = 120_000;
 
 /** Turns a suggestion was produced for, so a repeated event cannot spend twice. */
 const suggestedTurns = new Set();
+/**
+ * Why the last hand-off was refused, or "". The window reads it through
+ * `state()`, because the host's refusal of a grant it never confirmed otherwise
+ * looks exactly like a suggestion that never arrived.
+ */
+let lastSuggestionFailure = "";
 
 /**
  * The host's suggestion channel, or `null` on a host that predates it.
@@ -500,12 +506,23 @@ async function generateTurnSuggestion(payload) {
 
   const channel = composerSuggestChannel();
   if (!channel) return { shown: false, reason: "host-unsupported" };
-  const answer = await channel.suggest({
-    sessionId,
-    turnId,
-    text,
-    ttlMs: SUGGESTION_TTL_MS,
-  });
+  let answer;
+  try {
+    answer = await channel.suggest({
+      sessionId,
+      turnId,
+      text,
+      ttlMs: SUGGESTION_TTL_MS,
+    });
+  } catch (error) {
+    // A refusal here is almost always the permission: the host classifies
+    // `composer.suggest` as a grant it confirms at install, so a plugin that was
+    // loaded before it declared the permission is refused. Record it, and let
+    // the window say so instead of looking like a suggestion that never came.
+    lastSuggestionFailure = String(error?.code ?? error?.message ?? error);
+    throw error;
+  }
+  lastSuggestionFailure = "";
   const shown = answer?.shown === true;
   return {
     shown,
@@ -514,7 +531,6 @@ async function generateTurnSuggestion(payload) {
     modelKey: resolved.modelKey,
   };
 }
-
 /**
  * The event entry point.
  *
@@ -896,9 +912,11 @@ async function state() {
     },
     sessionModelKey,
     suggestionsPerMinute: SUGGESTIONS_PER_MINUTE,
-    // Whether the running host exposes the composer suggestion channel. The
-    // window says so outright instead of leaving the switch looking broken.
+    // Whether the running host exposes the composer suggestion channel, and why
+    // the last hand-off was refused. The window says either outright instead of
+    // leaving a switch that looks broken but reports nothing.
     suggestionSupported: composerSuggestChannel() !== null,
+    suggestionFailure: lastSuggestionFailure,
     titlesPerMinute: TITLES_PER_MINUTE,
     // Offered while no model is pinned; the plugin validates the choice against
     // whichever model ends up answering.
@@ -1015,7 +1033,7 @@ async function registerCommands() {
   await pi.commands.register({
     id: "enhancements.openSettings",
     title: "Enhancements: Open Settings",
-    keywords: ["enhancements", "prediction", "prompt", "增强", "预测", "设置"],
+    keywords: ["enhancements", "suggestion", "prompt", "增强", "建议", "设置"],
     category: "Enhancements",
     run: async () => {
       await pi.ui.openPanel({ title: "Enhancements" });
@@ -1034,6 +1052,7 @@ async function onLoad() {
   cachedSettings = null;
   sessionFileCache.clear();
   suggestedTurns.clear();
+  lastSuggestionFailure = "";
   titledTurns.clear();
   titlesInFlight.clear();
   pendingTitleTurns.clear();
