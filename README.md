@@ -3,22 +3,6 @@
 One plugin for four enhancement capabilities, configured from its own settings
 window. **All four start on**; the window is the only place to turn one off.
 
-## Install
-
-- **As a plugin package**: PI-Desktop → *Settings → Plugins → Install package*,
-  then pick `pi.official-enhancements-<version>.piplug` produced by
-  `pi-plugin pack`. This repository ships the built page and renderer module, so
-  nothing has to be compiled to install it.
-- **As a development plugin**: *Settings → Plugins → Load local plugin* pointed
-  at this folder. Edits hot-reload on save, except a manifest permission change,
-  which the host deliberately refuses to apply without the folder being loaded
-  again (see the note under Development).
-
-Requires PI-Desktop `>= 0.21.0`. The next-message suggestion additionally needs
-the host's composer suggestion channel (`composer.suggest`); on a build without
-it the settings window says so and the capability stays inert rather than
-spending a completion it could not show.
-
 | Capability | Where it shows | Switch |
 |---|---|---|
 | Next-message suggestion | The message you are likely to send next, shown in the composer placeholder after a turn ends; <kbd>Tab</kbd> accepts it | `predictionsEnabled` |
@@ -175,39 +159,36 @@ what is valid and the page renders the value that came back:
 
 | Permission | Why |
 |---|---|
-| `renderer.extension` | Draws the composer hint and the card in the app window |
+| `renderer.extension` | Draws the changed-files card in the app window |
 | `ui.panel` | The settings window |
 | `composer.transform` | The **Enhance prompt** action |
+| `composer.suggest` | The one-line suggestion offered in the composer placeholder (medium risk) |
 | `models.list` | The model pickers list enabled, authenticated models |
-| `agent.complete` | Predictions, enhancement, titles, and the model test |
-| `session.read` | The conversation's model, and its tool messages for the card |
+| `agent.complete` | The suggestion, enhancement, titles, and the model test |
+| `session.read` | The conversation's model and tail, and its tool messages for the card |
 | `session.autoTitle` | The bounded first-turn excerpt a title is written from, and the compare-and-set title write |
 
 `renderer.extension`, `agent.complete`, `session.read` and `session.autoTitle`
-are high risk and each requires an explicit grant. Only a draft, and the bounded
-first-turn excerpt for a title, are ever sent to a model; nothing else leaves
-the machine.
+are high risk and each requires an explicit grant; `composer.suggest` is medium
+risk and is confirmed at install, because a suggestion can put text into a draft
+the user may send. Only the conversation tail a suggestion is written from, a
+draft, and the bounded first-turn excerpt for a title are ever sent to a model;
+nothing else leaves the machine.
 
 ## Development
-
-Two build steps need a PI-Desktop checkout, because `@tailwindcss/node` and the
-`pi-plugin` devkit CLI are not published standalone. Development therefore
-happens in `examples/plugins/official-enhancements` inside that checkout, and
-this repository carries the result:
 
 ```bash
 node scripts/build-css.mjs   # compile src/view/styles.css -> dist/view.css
 node build.mjs               # bundle the settings window and the renderer module
 node scripts/smoke.mjs       # main.js contract against a fake host
-node <checkout>/packages/plugin-devkit/dist/cli.js check .   # validate
-node <checkout>/packages/plugin-devkit/dist/cli.js pack .    # build the .piplug
+node ../../../packages/plugin-devkit/dist/cli.js check .
 ```
 
 PI-Desktop installs plugins without compiling anything, so `views/index.html`
-and `renderer/index.mjs` are committed build output; installing the plugin needs
-none of the commands above. React stays external in the renderer module because
-the host answers the bare `react` specifier through the import map of its own
-window; the settings window is a standalone page and bundles React.
+and `renderer/index.mjs` are committed build output. React stays external in the
+renderer module because the host answers the bare `react` specifier through the
+import map of its own window; the settings window is a standalone page and
+bundles React.
 
 Changing a manifest permission does not take effect through hot reload: the host
 stops the reload of a development plugin whose permission set widened, so the

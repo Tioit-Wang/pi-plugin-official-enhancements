@@ -1061,13 +1061,19 @@ function onSessionTurnEnded(payload) {
   // the other.
   return Promise.all([runTitleForTurn(payload), runSuggestionForTurn(payload)]);
 }
-
 async function onUnload() {
   sessionFileCache.clear();
   suggestedTurns.clear();
   titledTurns.clear();
   titlesInFlight.clear();
   pendingTitleTurns.clear();
+  // The host drops a plugin's suggestion when it unloads; asking first keeps
+  // that true even when this hook runs after the shell stopped listening.
+  try {
+    await composerSuggestChannel()?.clearSuggestion?.();
+  } catch {
+    // Best effort: teardown must not fail on a host that never showed one.
+  }
   try {
     pi.events?.off?.("session:turnEnded", onSessionTurnEnded);
   } catch {

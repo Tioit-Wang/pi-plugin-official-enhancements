@@ -179,11 +179,18 @@ globalThis.pi = {
       suggestions.push(input);
       return { shown: true };
     },
+    clearSuggestion: async () => {
+      suggestionClears += 1;
+      return { ok: true };
+    },
   },
   workspace: {
     get: async () => ({ path: "/repo", name: "repo" }),
   },
 };
+
+/** How often the plugin asked the host to drop its suggestion. */
+let suggestionClears = 0;
 
 const require = createRequire(import.meta.url);
 const plugin = require(join(pluginRoot, "main.js"));
@@ -532,4 +539,7 @@ assert.equal(
   false,
   "an unloaded plugin is not listening for turns",
 );
+// Unloading is the last guard: the plugin asks the host to drop whatever it
+// left in the composer, so a disabled plugin cannot keep a suggestion on screen.
+assert.ok(suggestionClears >= 1, "unload clears the plugin's suggestion");
 console.log("main.js contract: ok");

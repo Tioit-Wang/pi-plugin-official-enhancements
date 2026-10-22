@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "pi.official-enhancements",
   "name": "Official Enhancements",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Four bundled enhancements: a next-message suggestion shown in the composer after each turn, prompt enhancement, session titles, and a changed-files card after each reply. Every capability starts on, each has an editable instruction prompt, and its own settings window is the only place to configure it.",
   "author": "PI-Desktop",
   "main": "main.js",
@@ -43,7 +43,8 @@
     "models.list",
     "agent.complete",
     "session.read",
-    "session.autoTitle"
+    "session.autoTitle",
+    "composer.suggest"
   ],
   "engines": {
     "piDesktop": ">=0.21.0"
