@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "pi.official-enhancements",
   "name": "Official Enhancements",
-  "version": "0.5.1",
-  "description": "Four bundled enhancements: a next-message suggestion shown in the composer after each turn, prompt enhancement, session titles, and a changed-files card after each reply. Every capability starts on, each has an editable instruction prompt, and its own settings window is the only place to configure it.",
+  "version": "0.6.0",
+  "description": "Three bundled enhancements: a next-message suggestion shown in the composer after each turn, prompt enhancement, and session titles. Every capability starts on, each has an editable instruction prompt, and its own settings window is the only place to configure it.",
   "author": "PI-Desktop",
   "main": "main.js",
   "ui": {
@@ -12,13 +12,6 @@
     "width": 520,
     "height": 640
   },
-  "renderer": "renderer/index.mjs",
-  "rendererActions": ["plugin.call"],
-  "rendererCallMethods": [
-    "enhancements.state",
-    "enhancements.saveSettings",
-    "enhancements.fileChanges"
-  ],
   "contributes": {
     "commands": [
       {
@@ -37,7 +30,6 @@
     ]
   },
   "permissions": [
-    "renderer.extension",
     "ui.panel",
     "composer.transform",
     "models.list",

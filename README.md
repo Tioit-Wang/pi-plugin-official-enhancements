@@ -1,14 +1,14 @@
 # Official Enhancements
 
-One plugin for four enhancement capabilities, configured from its own settings
-window. **All four start on**; the window is the only place to turn one off.
+One plugin for three enhancement capabilities, configured from its own settings
+window. **All three start on**; the window is the only place to turn one off.
 
 | Capability | Where it shows | Switch |
 |---|---|---|
 | Next-message suggestion | The message you are likely to send next, shown in the composer placeholder after a turn ends; <kbd>Tab</kbd> accepts it | `predictionsEnabled` |
 | Prompt enhancement | The **Enhance prompt** action on the composer | `promptEnhancementEnabled` |
 | Session titles | The session's title in the sidebar, after its first exchange | `titlesEnabled` |
-| Changed-files card | The files one reply touched, under the last reply | `fileChangesEnabled` |
+| Changed-files card | **Moved to the host**: rendered natively under the last reply, not by this plugin |
 
 The settings window is a detached panel (`ui.panel`), not a work-panel view: it
 opens on its own from the command palette (**Enhancements: Open Settings**) or
@@ -116,22 +116,20 @@ contract (ADR 0323) rather than a general transcript read:
   the same session. A repeated `turnId` is ignored, and the listener is removed
   on unload.
 
-## Changed-files card
+## Changed-files card (moved to the host)
 
-The card is an `entryExtra` block describing the **trailing exchange**: the tool
-messages after the newest user message. It reads the session through
-`pi.session.listMessages` and counts only file-writing tools (`write`, `edit`,
-`multiedit`, `apply_patch`, `notebookedit`, …). Paths are made
-workspace-relative and de-duplicated; the status is `A`, `M` or `D`, inferred
-from the tool and its answer. A stored transcript keeps the tool's answer text
-rather than the call arguments, so the path is taken from the call arguments
-when present and parsed out of the answer otherwise.
+This capability used to live here as an `entryExtra` block. It moved to the
+host's own transcript, for a reason worth recording: a plugin cannot read the
+conversation the user is having. `pi.session.listMessages` is gated by
+`session.read.own` and only answers for sessions the plugin imported itself,
+while `pi.session.getLlmContext` is served only from inside one of the plugin's
+own tool calls. A card that needs "the tool calls of the turn that just ended"
+therefore had no legal data source, and the version that shipped here could
+never render.
 
-`entryExtra` mounts under every finished reply, so the plugin also reports
-whether the reply being drawn is that trailing one, and the card renders only
-there. The reply is recognised by its transcript id, or by its text when the
-slot reports the id of the part it rendered instead of a message id.
-
+The host renders it natively instead, beside the parts it already owns, so the
+plugin now has no renderer module, no slot registration, and no `session.read`
+use for a transcript read.
 ## Settings
 
 Every value lives in the plugin's own settings record; nothing is declared in
@@ -154,23 +152,19 @@ what is valid and the page renders the value that came back:
 | `titleThinkingLevel` | string | `""` (the model default) |
 | `titlePrompt` | string | the built-in title instruction |
 | `titleMaxChars` | number | `48`, clamped to 16–80 |
-| `fileChangesEnabled` | boolean | `true` |
-| `fileChangesMaxFiles` | number | `12`, clamped to 1–50 |
 
 ## Permissions
 
 | Permission | Why |
 |---|---|
-| `renderer.extension` | Draws the changed-files card in the app window |
 | `ui.panel` | The settings window |
 | `composer.transform` | The **Enhance prompt** action |
 | `composer.suggest` | The one-line suggestion offered in the composer placeholder (medium risk) |
-| `models.list` | The model pickers list enabled, authenticated models |
+| `session.read` | The conversation's model, and the tail a suggestion is written from |
 | `agent.complete` | The suggestion, enhancement, titles, and the model test |
-| `session.read` | The conversation's model and tail, and its tool messages for the card |
 | `session.autoTitle` | The bounded first-turn excerpt a title is written from, and the compare-and-set title write |
 
-`renderer.extension`, `agent.complete`, `session.read` and `session.autoTitle`
+`agent.complete`, `session.read` and `session.autoTitle`
 are high risk and each requires an explicit grant; `composer.suggest` is medium
 risk and is confirmed at install, because a suggestion can put text into a draft
 the user may send. Only the conversation tail a suggestion is written from, a
@@ -181,16 +175,15 @@ nothing else leaves the machine.
 
 ```bash
 node scripts/build-css.mjs   # compile src/view/styles.css -> dist/view.css
-node build.mjs               # bundle the settings window and the renderer module
+node build.mjs               # bundle the settings window
 node scripts/smoke.mjs       # main.js contract against a fake host
 node ../../../packages/plugin-devkit/dist/cli.js check .
 ```
 
-PI-Desktop installs plugins without compiling anything, so `views/index.html`
-and `renderer/index.mjs` are committed build output. React stays external in the
-renderer module because the host answers the bare `react` specifier through the
-import map of its own window; the settings window is a standalone page and
-bundles React.
+PI-Desktop installs plugins without compiling anything, so `views/index.html` is
+committed build output and the plugin ships no renderer module at all: its only
+renderer surface (the changed-files card) moved into the host. React is bundled
+into the settings page because that page is standalone.
 
 Changing a manifest permission does not take effect through hot reload: the host
 stops the reload of a development plugin whose permission set widened, so the

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Exercise the plugin's main module against a fake host.
  *
  * This is a smoke test of the contract the renderer and the settings window
@@ -42,7 +42,7 @@ let llmSessionId = "s1";
 
 
 const messages = [
-  // `order: "desc"`: newest first, in the shape the host really returns — the
+  // `order: "desc"`: newest first, in the shape the host really returns 鈥?the
   // call is nested under `tool`, with its arguments and its result.
   {
     id: "m5",
@@ -132,7 +132,7 @@ globalThis.pi = {
   },
   session: {
     /**
-     * The transcript the card and the suggestion read, newest first — the order
+     * The transcript the card and the suggestion read, newest first 鈥?the order
      * the host returns for `order: "desc"`.
      */
     listMessages: async (input) =>
@@ -209,10 +209,11 @@ async function fireTurnEnded(payload) {
 
 // `stored` starts empty: a fresh install has no settings record, so every value
 // below comes from the plugin's own defaults.
-const initial = await plugin.onRendererCall("enhancements.state", {});
+const initial = await plugin.onPanelInvoke("enhancements.panelState", {});
+
+// The changed-files card is host-native now: the plugin reads no transcript and
 assert.equal(initial.settings.predictionsEnabled, true, "the suggestion starts on");
 assert.equal(initial.settings.promptEnhancementEnabled, true, "enhancement starts on");
-assert.equal(initial.settings.fileChangesEnabled, true, "the card starts on");
 assert.equal(initial.settings.predictionModelKey, "", "suggestions inherit the session model by default");
 assert.equal(initial.predictionPhrases, undefined, "no phrase list survives the model rewrite");
 assert.equal(initial.suggestionSupported, true, "the window is told the channel exists");
@@ -221,17 +222,17 @@ assert.equal(initial.sessionModelKey, "acme/session");
 assert.equal(initial.models[0].key, "acme/default");
 assert.ok(Array.isArray(initial.thinkingLevels) && initial.thinkingLevels.includes("high"));
 
-const saved = await plugin.onRendererCall("enhancements.saveSettings", {
+const saved = await plugin.onPanelInvoke("enhancements.saveSettings", {
+  // Retired keys from earlier shapes must not come back.
   fileChangesMaxFiles: 999,
-  // A retired key from the typing-era shape must not come back.
   predictionDelayMs: 999999,
 });
-assert.equal(saved.settings.fileChangesMaxFiles, 50, "a limit above the bound clamps");
+assert.equal(saved.settings.fileChangesMaxFiles, undefined, "the card's limit is gone with the card");
 assert.equal(saved.settings.predictionDelayMs, undefined, "the typing-era delay is gone");
 
 // Titles and the suggestion are two consumers of one event and one completion
 // budget; this file drives them separately so a failure names one capability.
-await plugin.onRendererCall("enhancements.saveSettings", { titlesEnabled: false });
+await plugin.onPanelInvoke("enhancements.saveSettings", { titlesEnabled: false });
 
 // --- suggestion: one per completed turn, on the session model ------------
 
@@ -265,19 +266,19 @@ assert.equal(suggestions.length, 1, "an aborted turn gets no suggestion");
 
 // --- suggestion: the switch, and a host without the channel -------------
 
-await plugin.onRendererCall("enhancements.saveSettings", { predictionsEnabled: false });
+await plugin.onPanelInvoke("enhancements.saveSettings", { predictionsEnabled: false });
 const beforeOff = completions.length;
 await fireTurnEnded({ sessionId: "s1", turnId: "t4", reason: "completed" });
 assert.equal(suggestions.length, 1, "the switch stops suggestions");
 assert.equal(completions.length, beforeOff, "and it stops them before spending a completion");
-await plugin.onRendererCall("enhancements.saveSettings", { predictionsEnabled: true });
+await plugin.onPanelInvoke("enhancements.saveSettings", { predictionsEnabled: true });
 
 // A host that predates the channel must not be charged for a suggestion it
 // cannot show.
 const savedComposer = globalThis.pi.composer;
 delete globalThis.pi.composer;
 assert.equal(
-  (await plugin.onRendererCall("enhancements.state", {})).suggestionSupported,
+  (await plugin.onPanelInvoke("enhancements.panelState", {})).suggestionSupported,
   false,
   "the window learns the channel is missing",
 );
@@ -301,7 +302,7 @@ globalThis.pi.composer = {
 };
 await fireTurnEnded({ sessionId: "s1", turnId: "t-refused", reason: "completed" });
 assert.equal(
-  (await plugin.onRendererCall("enhancements.state", {})).suggestionFailure,
+  (await plugin.onPanelInvoke("enhancements.panelState", {})).suggestionFailure,
   "PERMISSION_DENIED",
   "the window is told why the hand-off was refused",
 );
@@ -313,16 +314,16 @@ globalThis.pi.composer = refusingComposer;
 // block that spends more than a handful of slots starts from a clean window.
 await plugin.onLoad();
 
-await plugin.onRendererCall("enhancements.saveSettings", { predictionModelKey: "acme/extra" });
+await plugin.onPanelInvoke("enhancements.saveSettings", { predictionModelKey: "acme/extra" });
 await fireTurnEnded({ sessionId: "s1", turnId: "t6", reason: "completed" });
 assert.equal(completions.at(-1).modelKey, "acme/extra", "a configured model wins while it exists");
 
-await plugin.onRendererCall("enhancements.saveSettings", { predictionModelKey: "acme/gone" });
+await plugin.onPanelInvoke("enhancements.saveSettings", { predictionModelKey: "acme/gone" });
 await fireTurnEnded({ sessionId: "s1", turnId: "t7", reason: "completed" });
 assert.equal(completions.at(-1).modelKey, "acme/session", "a missing configured model falls back");
 
 sessionModelKey = "";
-await plugin.onRendererCall("enhancements.saveSettings", { predictionModelKey: "" });
+await plugin.onPanelInvoke("enhancements.saveSettings", { predictionModelKey: "" });
 await fireTurnEnded({ sessionId: "s1", turnId: "t8", reason: "completed" });
 assert.equal(completions.at(-1).modelKey, "acme/default", "with no session model the app default answers");
 sessionModelKey = "acme/session";
@@ -332,23 +333,23 @@ sessionModelKey = "acme/session";
 // `acme/session` reports ["low", "high"]; a supported level is honoured and an
 // unsupported one snaps to the nearest, so the choice is never silently lost.
 await plugin.onLoad();
-await plugin.onRendererCall("enhancements.saveSettings", {
+await plugin.onPanelInvoke("enhancements.saveSettings", {
   predictionModelKey: "acme/session",
   predictionThinkingLevel: "high",
 });
 await fireTurnEnded({ sessionId: "s1", turnId: "t9", reason: "completed" });
 assert.equal(completions.at(-1).thinkingLevel, "high", "a supported level is sent as chosen");
 
-await plugin.onRendererCall("enhancements.saveSettings", { predictionThinkingLevel: "max" });
+await plugin.onPanelInvoke("enhancements.saveSettings", { predictionThinkingLevel: "max" });
 await fireTurnEnded({ sessionId: "s1", turnId: "t10", reason: "completed" });
 assert.equal(completions.at(-1).thinkingLevel, "high", "an unsupported level snaps to the nearest");
 
 // A level outside the host's vocabulary is not stored at all.
-const cleaned = await plugin.onRendererCall("enhancements.saveSettings", {
+const cleaned = await plugin.onPanelInvoke("enhancements.saveSettings", {
   predictionThinkingLevel: "turbo",
 });
 assert.equal(cleaned.settings.predictionThinkingLevel, "", "an unknown level is discarded");
-await plugin.onRendererCall("enhancements.saveSettings", { predictionThinkingLevel: "" });
+await plugin.onPanelInvoke("enhancements.saveSettings", { predictionThinkingLevel: "" });
 
 // --- suggestion: the per-minute budget ----------------------------------
 
@@ -360,40 +361,6 @@ for (const turnId of ["b1", "b2", "b3", "b4"]) {
   await fireTurnEnded({ sessionId: "s1", turnId, reason: "completed" });
 }
 assert.equal(suggestions.length - beforeBudget, 3, "the fourth suggestion in a minute is dropped");
-
-// --- changed-files card ------------------------------------------------
-const files = await plugin.onRendererCall("enhancements.fileChanges", {
-  sessionId: "s1",
-  messageId: "m5",
-  content: newestReplyText,
-});
-assert.deepEqual(
-  files.files.map((file) => [file.path, file.status]),
-  [
-    ["src/a.ts", "modified"],
-    ["src/b.ts", "added"],
-  ],
-  "the card lists only the trailing turn, relative and deduplicated",
-);
-assert.equal(files.total, 2);
-assert.equal(files.isLastReply, true, "the trailing reply owns the card");
-
-// The slot also mounts under older replies; they must not borrow the card.
-const olderReply = await plugin.onRendererCall("enhancements.fileChanges", {
-  sessionId: "s1",
-  messageId: "m0",
-  content: "an earlier answer",
-});
-assert.equal(olderReply.isLastReply, false, "an older reply draws no card");
-
-// An id the transcript no longer has still matches when the text does: the slot
-// reports the part it rendered, and that id need not equal a message id.
-const byText = await plugin.onRendererCall("enhancements.fileChanges", {
-  sessionId: "s1",
-  messageId: "part-unknown",
-  content: newestReplyText,
-});
-assert.equal(byText.isLastReply, true, "the trailing reply is recognised by its text too");
 
 // --- prompt enhancement ------------------------------------------------
 
@@ -445,8 +412,8 @@ delete require.cache[require.resolve(join(pluginRoot, "main.js"))];
 const freshPlugin = require(join(pluginRoot, "main.js"));
 await freshPlugin.onLoad();
 
-await freshPlugin.onRendererCall("enhancements.saveSettings", { titlesEnabled: false });
-await freshPlugin.onRendererCall("enhancements.saveSettings", { predictionsEnabled: true });
+await freshPlugin.onPanelInvoke("enhancements.saveSettings", { titlesEnabled: false });
+await freshPlugin.onPanelInvoke("enhancements.saveSettings", { predictionsEnabled: true });
 await eventHandlers.get("session:turnEnded")({
   sessionId: "s1",
   turnId: "s-30",
@@ -455,7 +422,7 @@ await eventHandlers.get("session:turnEnded")({
 assert.equal(completions.at(-1).system, "Be terse.", "the edited suggestion prompt is used");
 
 // Hand the turn back to the titles: one consumer at a time.
-await freshPlugin.onRendererCall("enhancements.saveSettings", {
+await freshPlugin.onPanelInvoke("enhancements.saveSettings", {
   predictionsEnabled: false,
   titlesEnabled: true,
 });
@@ -521,7 +488,7 @@ assert.equal(panelState.titlesPerMinute, 3);
 
 const test = await plugin.onPanelInvoke("enhancements.testModel", {});
 assert.equal(test.ok, true);
-// The enhancement model is unset, so the app default answers — not the session
+// The enhancement model is unset, so the app default answers 鈥?not the session
 // model: only the two prediction-style capabilities prefer the session's.
 assert.equal(test.modelKey, "acme/default");
 

@@ -18,8 +18,6 @@
 
 "use strict";
 
-/** Default number of files the card shows. */
-const DEFAULT_MAX_FILES = 12;
 /** Longest suggestion kept; the placeholder shows one line and ellipsizes. */
 const SUGGESTION_MAX_CHARS = 120;
 /**
@@ -109,27 +107,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   titleThinkingLevel: "",
   titlePrompt: DEFAULT_TITLE_PROMPT,
   titleMaxChars: DEFAULT_TITLE_MAX_CHARS,
-  fileChangesEnabled: true,
-  fileChangesMaxFiles: DEFAULT_MAX_FILES,
 });
-
-/** Bounds the view may set. Anything outside is clamped, never rejected. */
-const LIMITS = Object.freeze({
-  fileChangesMaxFiles: { min: 1, max: 50 },
-});
-
-/** Tool names whose files count as "changed" in the card. */
-const FILE_TOOL_NAMES = new Set([
-  "write",
-  "edit",
-  "multiedit",
-  "apply_patch",
-  "notebookedit",
-  "writefile",
-  "editfile",
-  "create_file",
-  "str_replace_editor",
-]);
 
 /**
  * The host's thinking levels, weakest to strongest. Mirrors `THINKING_LEVELS`
@@ -146,21 +124,10 @@ function normalizeThinkingLevel(value) {
   return THINKING_ORDER.includes(level) ? level : "";
 }
 
-/**
- * `onRendererCall` methods. Only these cross the 2s renderer relay, which is
- * why a prediction is started and then polled instead of awaited: the model
- * call itself lives in the background, not behind the relay's timeout.
- */
-const RENDERER_METHODS = [
-  "enhancements.state",
-  "enhancements.saveSettings",
-  "enhancements.fileChanges",
-];
 
 /** Cached settings; `pi` only exists inside a running plugin process. */
 let cachedSettings = null;
-/** Last computed card per session, so a re-render does not flicker it. */
-const sessionFileCache = new Map();
+
 
 /* ------------------------------------------------------------------ *
  * Settings
@@ -217,12 +184,6 @@ function normalizeSettings(raw) {
       source.titleMaxChars,
       TITLE_MAX_CHARS_LIMIT,
       DEFAULT_TITLE_MAX_CHARS,
-    ),
-    fileChangesEnabled: asBoolean(source.fileChangesEnabled, DEFAULT_SETTINGS.fileChangesEnabled),
-    fileChangesMaxFiles: clampNumber(
-      source.fileChangesMaxFiles,
-      LIMITS.fileChangesMaxFiles,
-      DEFAULT_MAX_FILES,
     ),
   };
 }
@@ -756,161 +717,6 @@ function runTitleForTurn(payload) {
 }
 
 /* ------------------------------------------------------------------ *
- * Changed files
- * ------------------------------------------------------------------ */
-
-/** Tool arguments carry a path under one of several names across tools. */
-function pathFromToolArgs(args) {
-  const source = args && typeof args === "object" ? args : {};
-  for (const key of ["file_path", "filePath", "path", "target_file", "notebook_path"]) {
-    const value = source[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
-
-function safeParse(text) {
-  try {
-    return JSON.parse(String(text ?? ""));
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * A path named by a tool's own answer, for the records that carry no argument
- * object: "File created successfully at: /repo/src/a.ts", "Applied 1 edit to
- * /repo/src/a.ts", "Updated /repo/src/a.ts".
- */
-const PATH_IN_TEXT =
-  /((?:[A-Za-z]:[\\/]|\/)[^\s"'`()<>\[\],;]+\.[A-Za-z0-9]{1,8})(?=$|[\s"'`),;:])/;
-
-function pathFromToolText(content) {
-  const match = PATH_IN_TEXT.exec(String(content ?? ""));
-  if (!match) return "";
-  // Trailing punctuation belongs to the sentence, not to the path.
-  return match[1].replace(/[.:]+$/, "");
-}
-
-
-async function workspaceRoot() {
-  try {
-    const workspace = await pi.workspace.get();
-    return typeof workspace?.path === "string" ? workspace.path : "";
-  } catch {
-    return "";
-  }
-}
-
-/** Repo-relative and forward-slashed, so the list compares across platforms. */
-function relativePath(absolute, root) {
-  const value = absolute.replace(/\\/g, "/");
-  if (!root) return value;
-  const base = root.replace(/\\/g, "/").replace(/\/+$/, "");
-  if (base && value.toLowerCase().startsWith(`${base.toLowerCase()}/`)) {
-    return value.slice(base.length + 1);
-  }
-  return value;
-}
-
-/** Best-effort classification from the tool that touched the file. */
-function statusForTool(toolName, content) {
-  const name = String(toolName ?? "").toLowerCase();
-  if (name === "write" || name === "writefile" || name === "create_file") return "added";
-  if (name === "apply_patch" || name === "multiedit") return "modified";
-  const text = String(content ?? "");
-  if (/\b(created|added)\b/i.test(text) && !/\bmodified\b/i.test(text)) return "added";
-  if (/\b(deleted|removed)\b/i.test(text) && !/\bmodified\b/i.test(text)) return "deleted";
-  return "modified";
-}
-
-/**
- * Files touched by the trailing exchange of a session: everything after the
- * newest user message, so a card describes one exchange rather than the whole
- * conversation.
- *
- * The `entryExtra` slot mounts under every finished reply, so the answer also
- * says whether the reply being drawn is that trailing one. Without that check
- * every older reply would show the newest exchange's files.
- */
-async function fileChanges(args) {
-  const settings = await readSettings();
-  if (!settings.fileChangesEnabled) return { enabled: false, files: [], total: 0 };
-
-  const sessionId = asString(args?.sessionId, "");
-  if (!sessionId) return { enabled: true, files: [], total: 0 };
-
-  let messages;
-  try {
-    const result = await pi.session.listMessages({
-      sessionId,
-      limit: 400,
-      order: "desc",
-      contentLimit: 8000,
-    });
-    messages = Array.isArray(result?.messages) ? result.messages : [];
-  } catch (error) {
-    // An unreadable session keeps the last known card instead of blanking it.
-    const cached = sessionFileCache.get(sessionId);
-    return {
-      enabled: true,
-      files: cached?.files ?? [],
-      total: cached?.total ?? 0,
-      isLastReply: cached?.isLastReply ?? false,
-      message: String(error?.message ?? error),
-    };
-  }
-
-  // The newest exchange is what the card describes. With `order: "desc"` the
-  // list runs newest-first, so that exchange is the head of the array: it ends
-  // at the *first* user message. Cutting at the last one would keep the
-  // previous exchange and drop the current one.
-  const boundary = messages.findIndex((message) => message?.role === "user");
-  const turn = boundary >= 0 ? messages.slice(0, boundary) : messages;
-
-  // Only the trailing reply draws a card. Its id comes from the same transcript
-  // rows `listMessages` returns, but the slot reports the id of the part it
-  // rendered, so the text is compared as well: an id mismatch must not hide the
-  // card, and an older reply must not borrow it.
-  const newestReply = messages.find((message) => message?.role === "assistant");
-  const wantedId = asString(args?.messageId, "");
-  const wantedText = asString(args?.content, "").trim().slice(0, 200);
-  const isLastReply =
-    newestReply === undefined ||
-    newestReply.id === wantedId ||
-    (wantedText.length > 0 &&
-      String(newestReply.content ?? "").trim().slice(0, 200) === wantedText);
-
-  const root = await workspaceRoot();
-  const byPath = new Map();
-  for (const message of turn) {
-    if (message?.role !== "tool") continue;
-    // The host nests the call under `tool`; the flat names are kept for a
-    // transcript shape that predates it.
-    const toolName = String(message.tool?.name ?? message.toolName ?? "");
-    if (!FILE_TOOL_NAMES.has(toolName.toLowerCase())) continue;
-    const toolArgs =
-      message.tool?.args ?? message.toolArgs ?? message.args ?? safeParse(message.content);
-    const toolResult =
-      typeof message.tool?.result === "string" ? message.tool.result : message.content;
-    const rawPath = pathFromToolArgs(toolArgs) || pathFromToolText(toolResult);
-    if (!rawPath) continue;
-    const path = relativePath(rawPath, root);
-    if (byPath.has(path)) continue;
-    byPath.set(path, {
-      path,
-      status: statusForTool(toolName, toolResult),
-      toolName,
-    });
-  }
-
-  const all = [...byPath.values()].sort((left, right) => left.path.localeCompare(right.path));
-  const files = all.slice(0, settings.fileChangesMaxFiles);
-  sessionFileCache.set(sessionId, { files, total: all.length, isLastReply });
-  return { enabled: true, files, total: all.length, isLastReply };
-}
-
-/* ------------------------------------------------------------------ *
  * Host surfaces
  * ------------------------------------------------------------------ */
 
@@ -941,7 +747,6 @@ async function state() {
   return {
     apiVersion: STATE_API_VERSION,
     settings,
-    limits: LIMITS,
     titleMaxCharsLimit: TITLE_MAX_CHARS_LIMIT,
     promptMaxChars: PROMPT_MAX_CHARS,
     // What the window offers as "default" for each editable prompt.
@@ -988,8 +793,6 @@ async function onRendererCall(method, args) {
       const saved = await writeSettings(args ?? {});
       return { ok: true, settings: saved };
     }
-    case "enhancements.fileChanges":
-      return fileChanges(args);
     default: {
       const error = new Error(`unknown renderer method: ${method}`);
       error.code = "ENHANCEMENTS_UNKNOWN_METHOD";
@@ -1039,8 +842,6 @@ const PANEL_CHANNELS = {
   "enhancements.enhance": async (payload) => ({
     text: await enhanceText(payload?.draft, payload?.modelKey),
   }),
-  "enhancements.previewFiles": async (payload) =>
-    fileChanges({ sessionId: asString(payload?.sessionId, "") }),
 };
 
 async function onPanelInvoke(channel, payload) {
@@ -1090,7 +891,6 @@ async function registerCommands() {
  */
 async function onLoad() {
   cachedSettings = null;
-  sessionFileCache.clear();
   suggestedTurns.clear();
   lastSuggestionFailure = "";
   titledTurns.clear();
@@ -1121,7 +921,6 @@ function onSessionTurnEnded(payload) {
   return Promise.all([runTitleForTurn(payload), runSuggestionForTurn(payload)]);
 }
 async function onUnload() {
-  sessionFileCache.clear();
   suggestedTurns.clear();
   titledTurns.clear();
   titlesInFlight.clear();
@@ -1148,8 +947,6 @@ async function onUnload() {
 module.exports = {
   onLoad,
   onUnload,
-  onRendererCall,
   onPanelInvoke,
   onComposerTransform,
-  RENDERER_METHODS,
 };

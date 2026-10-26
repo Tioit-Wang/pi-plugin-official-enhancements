@@ -259,7 +259,6 @@ function App() {
 
   const settings = state?.settings ?? null;
   const models = state?.models ?? [];
-  const limits = state?.limits ?? { fileChangesMaxFiles: { min: 1, max: 50 } };
   const sessionModelKey = state?.sessionModelKey ?? "";
   const sessionModel = models.find((model) => model.key === sessionModelKey) ?? null;
   // Every level the plugin accepts while no model is pinned. The host's own
@@ -445,7 +444,7 @@ function App() {
         h(
           "p",
           { className: "mt-0.5 text-xs text-ink-muted" },
-          "Four capabilities. Switches apply at once; the three instruction prompts are saved together from here.",
+          "Three capabilities. Switches apply at once; the three instruction prompts are saved together from here.",
         ),
         promptStatus ? h(Status, { status: promptStatus }) : null,
       ),
@@ -625,44 +624,11 @@ function App() {
         hint: "Sent as the system instruction. The first user message and the first reply are sent as the message.",
       }),
     ),
-
-    h(
-      Capability,
-      {
-        title: "Changed-files card",
-        description: "Lists the files a reply changed, under the last reply of the conversation.",
-        on: settings.fileChangesEnabled,
-        busy,
-        onToggle: () =>
-          void save(
-            { fileChangesEnabled: !settings.fileChangesEnabled },
-            settings.fileChangesEnabled ? "Card off." : "Card on.",
-          ),
-      },
-      h(
-        Field,
-        {
-          label: "Files shown",
-          hint: `Between ${limits.fileChangesMaxFiles.min} and ${limits.fileChangesMaxFiles.max}.`,
-        },
-        h("input", {
-          type: "number",
-          className: INPUT_CLASS,
-          min: limits.fileChangesMaxFiles.min,
-          max: limits.fileChangesMaxFiles.max,
-          value: settings.fileChangesMaxFiles,
-          disabled: busy,
-          onChange: (event) =>
-            void save({ fileChangesMaxFiles: Number(event.target.value) }, "Limit saved."),
-        }),
-      ),
-    ),
-
     h(
       "p",
       { className: "pb-1 text-[11px] leading-relaxed text-ink-faint" },
-      "Only the draft is sent to a model; the transcript never leaves the machine. " +
-        "Permissions: renderer extension, panel, composer transform, model list, model completion, session read.",
+      "Only the conversation tail a suggestion is written from is sent to a model; nothing else leaves the machine. " +
+        "Permissions: panel, composer transform, composer suggestion, model list, model completion, session read.",
     ),
   );
 }

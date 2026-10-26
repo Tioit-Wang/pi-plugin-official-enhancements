@@ -1,15 +1,16 @@
 /**
- * Build the plugin's two distributable surfaces.
+ * Build the plugin's one distributable surface.
  *
- * PI-Desktop installs plugins without compiling anything, so both artifacts
- * are committed-ready output of this script:
+ * PI-Desktop installs plugins without compiling anything, so the artifact this
+ * produces is committed-ready:
  *
- * - `views/index.html` + `views/assets/index.js`: the configuration view, a
- *   React page bundled with Tailwind's compiled CSS inlined (the sandboxed page
- *   may not load a stylesheet from a CDN).
- * - `renderer/index.mjs`: the slot components. React stays external here,
- *   because the host answers the bare `react` specifier through the import map
- *   of its own window — a bundled copy would break hooks.
+ * - `views/index.html`: the configuration view, a React page bundled with
+ *   Tailwind's compiled CSS inlined (the sandboxed page may not load a
+ *   stylesheet from a CDN).
+ *
+ * There is no renderer bundle: the plugin's only renderer surface was the
+ * changed-files card, which is host-native now, so the plugin renders nothing
+ * inside the app window and declares no `renderer` entry.
  *
  * Run from this directory: `node build.mjs`.
  */
@@ -32,7 +33,7 @@ async function buildView() {
     jsx: "transform",
     minify: true,
     legalComments: "none",
-    define: { "process.env.NODE_ENV": '"production"' },
+    define: { "process.env.NODE_ENV": '\"production\"' },
   });
   const js = result.outputFiles[0].text;
   // The view is a sandboxed page with no CDN reach, so the compiled stylesheet
@@ -46,25 +47,5 @@ async function buildView() {
   return { bytes: html.length, file: "views/index.html" };
 }
 
-async function buildRenderer() {
-  const result = await build({
-    entryPoints: [join(here, "src/renderer/index.js")],
-    bundle: true,
-    write: false,
-    format: "esm",
-    platform: "browser",
-    target: "chrome120",
-    jsx: "transform",
-    external: ["react", "react-dom", "react-dom/client", "react/jsx-runtime"],
-    legalComments: "none",
-  });
-  mkdirSync(join(here, "renderer"), { recursive: true });
-  const text = result.outputFiles[0].text;
-  writeFileSync(join(here, "renderer/index.mjs"), text, "utf8");
-  return { bytes: text.length, file: "renderer/index.mjs" };
-}
-
-const outputs = [await buildView(), await buildRenderer()];
-for (const output of outputs) {
-  console.log(`${output.file}  ${(output.bytes / 1024).toFixed(1)} KB`);
-}
+const view = await buildView();
+console.log(`${view.file}  ${(view.bytes / 1024).toFixed(1)} KB`);
