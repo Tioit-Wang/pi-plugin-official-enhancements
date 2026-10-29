@@ -51,3 +51,38 @@
   --oe-warn: #fbbf24;
   --oe-danger: #f87171;
 }
+
+/* Memory management shares the existing semantic palette and stays usable in narrow panels. */
+.memory-panel { border: 1px solid var(--oe-line); border-radius: 12px; background: var(--oe-surface); padding: 16px; display: grid; gap: 12px; color: var(--oe-ink); font-size: 12px; }
+.memory-panel h2, .memory-panel h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.memory-panel p { margin: 0; }
+.memory-heading, .memory-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.memory-heading > div { flex: 1; min-width: 160px; }
+.memory-hint { display: block; color: var(--oe-ink-muted); font-size: 12px; line-height: 1.5; }
+.memory-label { display: block; font-weight: 500; }
+.memory-toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; cursor: pointer; }
+.memory-toggle input { flex: 0 0 auto; width: 18px; height: 18px; accent-color: var(--oe-accent); cursor: pointer; }
+.memory-options { border: 1px solid var(--oe-line); border-radius: 8px; margin: 0; padding: 8px 12px; }
+.memory-options legend { padding: 0 4px; color: var(--oe-ink-muted); }
+.memory-ai-options { display: grid; gap: 8px; }
+.memory-panel button, .memory-panel select, .memory-panel textarea, .memory-panel input[type="search"] { font: inherit; color: var(--oe-ink); border: 1px solid var(--oe-line); border-radius: 8px; background: var(--oe-surface-sunken); padding: 8px 10px; }
+.memory-panel button { min-height: 36px; cursor: pointer; background: transparent; }
+.memory-panel button:hover:not(:disabled) { background: var(--oe-surface-sunken); }
+.memory-panel :disabled { opacity: 0.5; cursor: not-allowed; }
+.memory-panel :focus-visible { outline: 2px solid var(--oe-ink-muted); outline-offset: 2px; }
+.memory-panel .memory-primary { background: var(--oe-accent); color: var(--oe-accent-ink); border-color: var(--oe-accent); }
+.memory-panel .memory-primary:hover:not(:disabled) { background: var(--oe-accent); opacity: 0.85; }
+.memory-field { display: grid; gap: 4px; }
+.memory-field > span { font-weight: 500; }
+.memory-field textarea, .memory-field input, .memory-field select { width: 100%; min-width: 0; box-sizing: border-box; }
+.memory-field textarea { resize: vertical; min-height: 80px; }
+.memory-panel form { display: grid; gap: 8px; }
+.memory-actions > .memory-hint { margin-right: auto; }
+.memory-context { overflow-wrap: anywhere; color: var(--oe-ink-muted); }
+.memory-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.memory-entry { border: 1px solid var(--oe-line); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+.memory-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-delete { display: grid; gap: 8px; border-top: 1px solid var(--oe-line); padding-top: 8px; }
+.memory-panel .memory-danger, .memory-alert { color: var(--oe-danger); }
+.memory-notice { overflow-wrap: anywhere; }
+.memory-status { color: var(--oe-ink-muted); }

@@ -1,0 +1,196 @@
+# Scoped memory design and source analysis
+
+Status: implemented in plugin 0.7.0. Research checked on 2026-10-30
+(Asia/Shanghai). This plugin changes no PI host database, IPC, or SDK contract.
+
+## Research
+
+GitHub stars below were read from the public repository API during research;
+they are a dated qualification of the references, not a maintained counter.
+
+| Project | Stars at inspection | Source inspected |
+|---|---:|---|
+| [Mem0](https://github.com/mem0ai/mem0) | 68,056 | `26cdefb46600c0fa5953c4b5ee5003c125539fc4` |
+| [Open WebUI](https://github.com/open-webui/open-webui) | 157,148 | `f7ac7ee10962ddec0017f5c29b6740d9b9c5faca` |
+| [LangGraph](https://github.com/langchain-ai/langgraph) | 44,103 | Current official JavaScript Stores documentation |
+| [Letta](https://github.com/letta-ai/letta) | 25,289 | Historical `archive` branch, `56ba9c25552605eec89de8ed3dc6394b625c1993` |
+
+### Mem0: context-bound scopes
+
+Mem0's shared agent integration uses project, session, and global scopes with
+user/app/run identities. Its Pi integration delegates tools to this shared
+layer. The scope resolver prevents an unrequested promotion to global scope.
+The OSS client can store already-selected text without LLM inference.
+See the fixed [scope resolver](https://github.com/mem0ai/mem0/blob/26cdefb46600c0fa5953c4b5ee5003c125539fc4/integrations/agent-plugin-core/typescript/src/scoping.ts),
+[Pi memory tools](https://github.com/mem0ai/mem0/blob/26cdefb46600c0fa5953c4b5ee5003c125539fc4/integrations/pi-agent-plugin/src/memory/tools.ts),
+and [OSS memory client](https://github.com/mem0ai/mem0/blob/26cdefb46600c0fa5953c4b5ee5003c125539fc4/mem0-ts/src/oss/src/memory/index.ts).
+
+Applied here: the model chooses a level but cannot supply an owner identity.
+Every record has an explicit scope and exact owner. A user-only search never
+means all project/session records for that user. Directory basenames are not
+used as project identity because unrelated projects can share a name.
+
+### Open WebUI: user control and model tools
+
+Open WebUI exposes manual management alongside native model memory tools.
+Records can be edited or deleted by identity; types and paths organize memory.
+The system distinguishes access controls, model tools, and prompt injection,
+and bounds the injected content. Its backend applies user ownership checks.
+See [official memory documentation](https://docs.openwebui.com/features/chat-conversations/memory/),
+[CRUD routes](https://github.com/open-webui/open-webui/blob/f7ac7ee10962ddec0017f5c29b6740d9b9c5faca/backend/open_webui/routers/memories.py),
+and [memory rendering](https://github.com/open-webui/open-webui/blob/f7ac7ee10962ddec0017f5c29b6740d9b9c5faca/backend/open_webui/utils/memory.py).
+
+Applied here: one service validates both manual and AI operations, backend
+switch checks cover every tool call, records remain manually manageable while
+AI use is off, and retrieval has an explicit content budget. Unlike its full
+web application, this plugin does not implement a server or background review.
+
+### LangGraph: separate session state and namespaced facts
+
+LangGraph separates thread checkpoints from a Store for cross-thread values.
+A Store namespace can represent user/project identity, and records have their
+own keys. Embedding search is optional. Its namespace search defaults to
+prefix matching and backend-dependent ordering.
+See [official JavaScript Stores documentation](https://docs.langchain.com/oss/javascript/langgraph/stores).
+
+Applied here: small versioned records with a distinct owner, exact matching
+before ranking, and deterministic ordering. There is no need to introduce the
+graph runtime or a vector database for a bounded local store.
+
+### Letta: bounded memory blocks, historical reference
+
+Letta's historical implementation combines labeled core memory blocks with
+searchable archival memory. Blocks have explicit capacity, and their rendering
+distinguishes structure from content. See [memory block documentation](https://docs.letta.com/v1-sdk/memory/memory-blocks/)
+and the [archived renderer](https://github.com/letta-ai/letta/blob/56ba9c25552605eec89de8ed3dc6394b625c1993/letta/schemas/memory.py).
+The current repository states that the old V1 server is retired, so this is a
+historical design reference. The three projects above supply active references.
+
+Applied here: clear descriptions of each level and a hard recall budget. The
+host does not expose a general prompt hook for sandboxed plugins, so this
+plugin returns memories as on-demand tool results instead of claiming to add
+always-present core memory blocks.
+
+## Implemented contract
+
+### Ownership and switches
+
+- User owner is `local-user`, within the current plugin-private PI profile.
+- Project owner is `project:<host-project-id>` when the selected session path
+  matches the host workspace or a registered group root. A host without that
+  matching identity uses `path:<full-project-path>`.
+- Session owner is the trusted host session ID. Missing context never maps to
+  an `unknown` shared bucket or an unrelated visible workspace.
+- AI execution requires a host-bound session and that session must remain
+  selected. The panel carries its displayed context on mutations; stale
+  contexts are refused. Asynchronous host reads are checked again before use.
+- Master enablement, three level switches, AI reads, and AI writes are distinct
+  booleans. The master and AI writes default off. Successful switch changes
+  apply to all following operations in the serialized queue.
+- Disabled memory remains editable in the manager. Switching off stops future
+  tool reads/writes; it cannot retract text already returned into a transcript.
+- AI writes are denied in Plan/Goal. Only `recall` is declared plan-safe.
+
+### Persistence and errors
+
+`memory.v1.json` is ordinary private JSON, not a secret store. Its schema is:
+
+```text
+schemaVersion: 1
+settings: six boolean switches
+entries: [{id, scope, owner, content, revision, source, createdAt, updatedAt}]
+```
+
+The service serializes settings, reads, and writes to avoid stale snapshots.
+It writes a unique mode-0600 temporary file in the same directory, syncs its
+contents, rechecks context/cancellation, then renames it into place. The cached
+snapshot changes only after rename succeeds. Unload cancels pending work and
+waits for the queue. This assumes one live plugin writer per private data
+directory; concurrent independent PI processes sharing that directory are not
+supported. File sync plus rename protects against partial writes; directory
+metadata is not separately fsynced, so power-loss durability is OS dependent.
+
+Invalid JSON, invalid record shapes, excessive size, or an unsupported schema
+version produces a visible error without resetting the store. I/O failures
+retain the prior snapshot and do not log memory content or host paths. The
+original enhancement settings remain in their existing settings record.
+There is no migration of the host database or existing enhancement settings.
+
+Updates and deletions require the currently visible ID, exact scope/owner, and
+expected revision. Duplicate additions in one owner scope are idempotent.
+Cross-owner guessed IDs do not grant access. Atomic writes leave neither the
+cache nor the file reporting an uncommitted mutation.
+
+### Retrieval and trust
+
+Retrieval first filters exact scope/owner and enabled levels, then orders by
+session/project/user, lexical match score, descending update time, and stable
+ID. English words and Chinese bigrams are normalized for matching. This is
+lexical search; synonyms require an appropriate query. Empty queries list
+recent entries within level order. Exact duplicate content is omitted from
+combined recall. Conflicting statements remain visible rather than being
+semantically rewritten.
+
+Limits: 2,000 UTF-16 code units per entry, 100 records per owner scope, 500 total,
+4 MiB serialized file, 512 query characters, 20 recall entries and 6,000 content
+characters (default 10 entries). `truncated` reports omitted matching records;
+JSON metadata is additional to the content budget. No memory text is promoted
+to a system role, evaluated, or rendered as HTML. Tool guidance explains that
+current user instructions override stored facts. Model selection and writing
+quality remain model dependent.
+
+Changing an old host's path-based project identity, moving its project folder,
+or switching to host group IDs does not migrate records automatically. Old
+entries stay in the private file; a future identity migration must preserve
+them explicitly. Session records persist until manually deleted or the plugin
+is uninstalled; there is no TTL or automatic deletion hook.
+
+## Acceptance and verification
+
+Run from the request worktree using the existing PI toolchain/dependencies:
+
+```bash
+node --test --test-timeout=60000 scripts/memory.test.mjs scripts/memory-host.test.mjs
+node --test --test-timeout=60000 scripts/memory-ui.test.mjs
+node scripts/smoke.mjs
+node scripts/build-css.mjs
+node build.mjs
+node --test --test-timeout=60000 scripts/build.test.mjs
+```
+
+The first command tests real temporary private files through the service and
+plugin entry points. The renderer test runs the actual React component in a
+hidden Electron window with an isolated profile and a fake host bridge. It
+never attaches to a running PI instance or calls a provider. Each test suite
+has a 60-second bound; the Electron child is killed after 55 seconds.
+
+Representative scenarios:
+
+1. In settings, manually save one record at each level while AI is off. Enable
+   recall, retrieve the three levels, enable writes, then update/delete through
+   the AI tool and verify the same manager shows the result.
+2. Change session within a project: retain user/project entries, exclude the
+   other session. Change project: retain only user entries. Group roots share
+   host identity; same-named unrelated paths remain separate.
+3. Disable any level, recall, or writes, then repeat tool calls. Disabled data
+   is excluded/refused while manual management continues to work.
+4. Save concurrently, edit with a stale revision, supply guessed foreign IDs,
+   switch context during an await, cancel queued/in-flight work, or unload.
+   No operation lands in another scope or corrupts later queue operations.
+5. Restart the plugin and recall durable records. Corrupt/future-version files
+   are preserved on error; failed rename retains old disk/cache state.
+6. In the renderer, add/edit/search/delete with confirmation; verify empty
+   states, independent switches, save errors, context clearing, unavailable
+   scopes, late response rejection, missing grant guidance, EN/zh-CN locale
+   changes, text escaping, and listener cleanup.
+
+Live installed-plugin/provider behavior is a separate manual acceptance step:
+load this folder or its built package in PI, grant `agent.tool.register`, enable
+memory, add a project rule, and explicitly ask the model to recall it. This
+step needs an actual provider and is not part of the isolated automated tests.
+
+The generated HTML also has a syntax regression test: template replacement
+must insert JavaScript literally. Passing a bundle as a string replacement
+interprets dollar replacement tokens and can corrupt React's emitted code. The
+builder now uses callback replacements; the regression test fails on the old
+builder and passes on the new one.

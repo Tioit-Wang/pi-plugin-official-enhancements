@@ -394,7 +394,7 @@ assert.match(savedPrompts.settings.titlePrompt, /^You name a conversation/, "an 
 const withPrompts = await plugin.onPanelInvoke("enhancements.panelState", {});
 // The window refuses to trust an answer without this marker: it would come from
 // an older `main.js`, which discards the setting keys it does not know.
-assert.equal(withPrompts.apiVersion, 2, "state carries the shape version");
+assert.equal(withPrompts.apiVersion, 3, "state carries the shape version");
 for (const key of ["predictionPrompt", "enhancementPrompt", "titlePrompt"]) {
   assert.match(withPrompts.promptDefaults[key], /\S/, `${key} ships a built-in instruction`);
   assert.match(withPrompts.settings[key], /\S/, `${key} is never empty in state`);

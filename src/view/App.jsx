@@ -15,6 +15,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 
 import { watchAppearance } from "./appearance.js";
+import { MemoryPanel } from "./MemoryPanel.jsx";
 
 const { useCallback, useEffect, useState } = React;
 const h = React.createElement;
@@ -108,7 +109,7 @@ const PROMPT_KEYS = ["predictionPrompt", "enhancementPrompt", "titlePrompt"];
  * `state.apiVersion` is how a stale process becomes visible instead of showing
  * up as a switch that flips back on its own.
  */
-const EXPECTED_API = 2;
+const EXPECTED_API = 3;
 
 /** The draft shape the editors bind to, taken from a settings record. */
 function promptDraft(settings) {
@@ -422,8 +423,8 @@ function App() {
         h(
           "p",
           { className: "mt-1" },
-          "Reload the plugin folder (Plugins, then Official Enhancements, then Reload) so this version's " +
-            "permissions and settings take effect. Until then a switch flips back and the instruction prompts " +
+          "Load the updated plugin folder again from Plugins and approve its permissions so this version's " +
+            "settings take effect. Until then a switch flips back and the instruction prompts " +
             "stay empty, because the old process discards the keys it does not know.",
         ),
       )
@@ -444,7 +445,7 @@ function App() {
         h(
           "p",
           { className: "mt-0.5 text-xs text-ink-muted" },
-          "Three capabilities. Switches apply at once; the three instruction prompts are saved together from here.",
+          "Four capabilities. Switches apply at once; the three instruction prompts are saved together from here.",
         ),
         promptStatus ? h(Status, { status: promptStatus }) : null,
       ),
@@ -480,6 +481,7 @@ function App() {
       ),
     ),
 
+    h(MemoryPanel, { bridge, disabled: stale }),
     h(
       Capability,
       {
@@ -627,8 +629,8 @@ function App() {
     h(
       "p",
       { className: "pb-1 text-[11px] leading-relaxed text-ink-faint" },
-      "Only the conversation tail a suggestion is written from is sent to a model; nothing else leaves the machine. " +
-        "Permissions: panel, composer transform, composer suggestion, model list, model completion, session read.",
+      "Suggestions, prompt enhancement, and session titles send their bounded inputs to the selected model. " +
+        "Memory stays local until recalled into a conversation. Permissions: panel, composer transform, composer suggestion, model list, model completion, session read, agent tools.",
     ),
   );
 }
