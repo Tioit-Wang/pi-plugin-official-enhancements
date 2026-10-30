@@ -132,18 +132,20 @@ never render.
 The host renders it natively instead, beside the parts it already owns, so the
 plugin now has no renderer module, no slot registration, and no `session.read`
 use for a transcript read.
-## User, project, and session memory
+## User and project memory
 
 Open **Enhancements: Open Settings**, then the **Memory** section (localized to
-English or Simplified Chinese). Add, edit, search, or delete entries at any of
-the three levels. A delete needs a second confirmation. Manual management works
-even while AI memory is off.
+English or Simplified Chinese). Add, edit, search, or delete entries at either
+level. A delete needs a second confirmation and keeps the entry as retired
+history. Manual management works even while AI memory is off.
 
-| Level | Visibility |
-|---|---|
-| User | All projects and sessions in the same local PI profile |
-| Project | Sessions in the current host project group; absolute project path on hosts without group IDs |
-| Session | Only the current session, including after restart |
+| Level | Visibility | Written by |
+|---|---|---|
+| User | All projects and sessions in the same local PI profile | The user only; the assistant may propose an entry |
+| Project | Sessions in the current host project group; absolute project path on hosts without group IDs | The user or the assistant |
+
+There is no session level. Mid-task context already lives in the transcript, so
+a second copy only adds staleness.
 
 Use **Use memory** to allow the AI to use memories, then select the available
 levels. **AI recall** and **AI write** have independent switches. Level switches
@@ -153,24 +155,38 @@ managed records. The initial switches are:
 | Switch | Default |
 |---|---|
 | Use memory | Off |
-| User / Project / Session | On, gated by Use memory |
+| User / Project | On, gated by Use memory |
 | AI recall | On, gated by Use memory |
 | AI write | Off |
 
 After enabling recall, ask the assistant to look up relevant saved preferences
 or project decisions. After additionally enabling writes, requests such as
-"Remember for this project that we use pnpm" or "Remember only in this session
-that we are debugging login" let it save a scoped entry. All AI entries remain
-visible and editable in the same manager. The tool description instructs the
-assistant to save only requested facts, choose the narrowest suitable level,
-and never treat stored text as system instructions. Model compliance is not a
-security boundary: the backend enforces scope, switches, revisions, and limits.
+"Remember for this project that we use pnpm" let it save a project entry. A
+user-level save from the assistant is a **proposal**: it comes back for
+confirmation and is written only when the user accepts it in settings, because
+a user preference shapes every future conversation. The tool description
+instructs the assistant to save only requested facts, choose the narrowest
+suitable level, and never treat stored text as system instructions. Model
+compliance is not a security boundary: the backend enforces scope, switches,
+revisions, and limits.
 
-Recall combines only enabled entries from the current scopes, with session
-before project before user, then lexical relevance and recency within each
-level. Search supports English and Chinese locally. Identical content is
-deduplicated; different statements are kept as separate records. Current user
-instructions take priority over remembered facts.
+Recall combines only enabled entries from the current scopes, with project
+before user, then lexical relevance and recency within each level. Search
+supports English and Chinese locally. Identical content is deduplicated; an
+identical label with different content supersedes the earlier entry. Current
+user instructions take priority over remembered facts.
+
+### Label supersession
+
+Entries carry a **label** (`title`). Saving again with the same label at the same
+level retires the previous entry instead of deleting it: the old row gets a
+`validUntil` timestamp and a `supersededBy` pointer, and stays on disk. Recall
+and the panel only show active rows, so the visible result is an update, while
+the history stays auditable and reversible. Two timestamps are recorded per
+entry — `createdAt`/`updatedAt` for when we wrote it, `validUntil` for when it
+stopped applying — and they never overwrite each other.
+
+### Retrieval and storage
 
 The plugin provides an on-demand `memory` agent tool with `recall`, `save`, and
 `delete` actions. It does **not** automatically inject memories at every turn
@@ -181,17 +197,27 @@ used. Recalled entries travel to the conversation model as tool results.
 
 The local file is `<plugin-private-data>/memory.v1.json`, separate from the
 existing enhancement settings. It is ordinary JSON, not encrypted secret
-storage. Limits are 2,000 characters per entry, 100 entries per scope owner,
-500 in total, and at most 20 entries / 6,000 content characters per recall
-(10 entries by default). AI update/delete requires the last recalled revision.
-Unloading or disabling the plugin stops tool access; reloading preserves data.
-Uninstall follows the host's normal plugin-private-data cleanup policy.
+storage. Limits are 500 characters per user entry / 4,000 characters and 50
+entries per profile, and 2,000 characters per project entry / 32 KB and 100
+entries per project. A recall returns at most 20 entries / 6,000 content
+characters (10 by default). AI update/delete requires the last recalled
+revision. Unloading or disabling the plugin stops tool access; reloading
+preserves data. Uninstall follows the host's normal plugin-private-data cleanup
+policy.
 
-Project/session entries cannot be managed without the corresponding selection.
-Context switches clear the panel's old draft when refreshed or focused. The
-backend refuses a stale save rather than moving it to the newly selected scope.
-Tool access is limited to the invoking session while it remains selected;
-background sessions must become selected before using memory tools.
+Project entries cannot be managed without a selected project. Context switches
+clear the panel's old draft when refreshed or focused. The backend refuses a
+stale save rather than moving it to the newly selected scope. Tool access is
+limited to the invoking session while it remains selected; background sessions
+must become selected before using memory tools.
+
+Files written by 0.7.0 carried a session level. Loading one drops its session
+entries and its `sessionEnabled` switch, and keeps the user and project rows; the
+file is only rewritten when the next mutation happens, so a read never destroys
+the original.
+
+For implementation analysis, sources, contracts, and acceptance scenarios, see
+[the memory design](docs/memory-design.md).
 
 For implementation analysis, sources, contracts, and acceptance scenarios, see
 [the memory design](docs/memory-design.md).

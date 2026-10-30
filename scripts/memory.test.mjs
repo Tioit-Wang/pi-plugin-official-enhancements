@@ -14,7 +14,6 @@ const DEFAULT_SETTINGS = {
   enabled: false,
   userEnabled: true,
   projectEnabled: true,
-  sessionEnabled: true,
   aiReadEnabled: true,
   aiWriteEnabled: false,
 };
@@ -76,28 +75,31 @@ test("manual management, AI recall/write, isolation, disablement and restart for
   assert.deepEqual(initial.settings, DEFAULT_SETTINGS);
   assert.deepEqual(initial.entries, []);
   assert.equal(initial.context.projectKey, "project:p-one");
-  assert.equal(initial.limits.contentChars, 2000);
+  assert.equal(initial.limits.project.contentChars, 2000);
 
   await f.add("user", "Use concise explanations.");
   await f.add("project", "This project uses pnpm.");
-  await f.add("session", "Focus on the login regression.");
+  await f.add("project", "Focus on the login regression.");
   await rejectsCode(f.recall(), "MEMORY_DISABLED");
 
   await f.service.updateSettings({ enabled: true });
   const recalled = await f.recall();
-  assert.deepEqual(recalled.memories.map((entry) => entry.scope), ["session", "project", "user"]);
-  await rejectsCode(f.service.execute({ action: "save", scope: "session", content: "Keep the patch small." }, f.toolContext), "MEMORY_DISABLED");
+  assert.deepEqual(recalled.memories.map((entry) => entry.scope), ["user", "project", "project"]);
+  await rejectsCode(f.service.execute({ action: "save", scope: "project", content: "Keep the patch small." }, f.toolContext), "MEMORY_DISABLED");
   await f.service.updateSettings({ aiWriteEnabled: true });
-  await f.service.execute({ action: "save", scope: "session", content: "Keep the patch small." }, f.toolContext);
+  await f.service.execute({ action: "save", scope: "project", content: "Keep the patch small." }, f.toolContext);
   const saved = (await f.recall()).memories.find((entry) => entry.content === "Keep the patch small.");
   assert.ok(saved);
   assert.equal(saved.source, "ai");
-  await f.service.execute({ action: "save", scope: "session", id: saved.id, expectedRevision: saved.revision, content: "Add a regression test." }, f.toolContext);
+  await f.service.execute({ action: "save", scope: "project", id: saved.id, expectedRevision: saved.revision, content: "Add a regression test." }, f.toolContext);
   assert.ok(contents(await f.recall()).includes("Add a regression test."));
   assert.ok(!contents(await f.recall()).includes("Keep the patch small."));
 
   f.select("s-two", "/projects/one", "p-one");
-  assert.deepEqual(new Set(contents(await f.recall())), new Set(["Use concise explanations.", "This project uses pnpm."]));
+  assert.deepEqual(new Set(contents(await f.recall())), new Set([
+    "Use concise explanations.", "This project uses pnpm.",
+    "Focus on the login regression.", "Add a regression test.",
+  ]));
   f.select("s-three", "/projects/two", "p-two");
   assert.deepEqual(contents(await f.recall()), ["Use concise explanations."]);
   await f.add("project", "This project uses npm.");
@@ -121,9 +123,9 @@ test("manual management, AI recall/write, isolation, disablement and restart for
 
 test("each scope switch filters AI reads and writes without hiding manual records", async (t) => {
   const f = await fixture(t);
-  for (const scope of ["user", "project", "session"]) await f.add(scope, `${scope} note`);
+  for (const scope of ["user", "project"]) await f.add(scope, `${scope} note`);
   await f.service.updateSettings({ enabled: true, aiWriteEnabled: true });
-  for (const scope of ["user", "project", "session"]) {
+  for (const scope of ["user", "project"]) {
     await f.service.updateSettings({ [`${scope}Enabled`]: false });
     assert.ok(!(await f.recall()).memories.some((entry) => entry.scope === scope));
     await rejectsCode(f.recall({ scope }), "MEMORY_SCOPE_DISABLED");
@@ -131,20 +133,20 @@ test("each scope switch filters AI reads and writes without hiding manual record
     assert.ok((await f.service.state()).entries.some((entry) => entry.scope === scope));
     await f.service.updateSettings({ [`${scope}Enabled`]: true });
   }
-  assert.equal((await f.recall()).memories.length, 3);
+  assert.equal((await f.recall()).memories.length, 2);
 });
 
 test("AI read and write permissions are independent and checked on every call", async (t) => {
   const f = await fixture(t);
   await f.service.updateSettings({ enabled: true, aiReadEnabled: false, aiWriteEnabled: true });
-  await f.service.execute({ action: "save", scope: "user", content: "Saved on request." }, f.toolContext);
+  await f.service.execute({ action: "save", scope: "project", content: "Saved on request." }, f.toolContext);
   await rejectsCode(f.recall(), "MEMORY_DISABLED");
   await f.service.updateSettings({ aiReadEnabled: true, aiWriteEnabled: false });
   const entry = (await f.recall()).memories[0];
   assert.equal(entry.content, "Saved on request.");
-  await rejectsCode(f.service.execute({ action: "delete", scope: "user", id: entry.id, expectedRevision: entry.revision }, f.toolContext), "MEMORY_DISABLED");
+  await rejectsCode(f.service.execute({ action: "delete", scope: "project", id: entry.id, expectedRevision: entry.revision }, f.toolContext), "MEMORY_DISABLED");
   await f.service.updateSettings({ aiWriteEnabled: true });
-  await f.service.execute({ action: "delete", scope: "user", id: entry.id, expectedRevision: entry.revision }, f.toolContext);
+  await f.service.execute({ action: "delete", scope: "project", id: entry.id, expectedRevision: entry.revision }, f.toolContext);
   assert.deepEqual(contents(await f.recall()), []);
 });
 
@@ -155,14 +157,12 @@ test("concurrent additions and settings changes do not overwrite each other", as
     ...Array.from({ length: 20 }, (_, index) => f.service.save({ context, scope: "user", content: `Parallel note ${index}` })),
     f.service.updateSettings({ enabled: true }),
     f.service.updateSettings({ aiWriteEnabled: true }),
-    f.service.updateSettings({ sessionEnabled: false }),
   ]);
   await f.restart();
   const state = await f.service.state();
   assert.equal(new Set(state.entries.map((entry) => entry.id)).size, 20);
   assert.equal(state.settings.enabled, true);
   assert.equal(state.settings.aiWriteEnabled, true);
-  assert.equal(state.settings.sessionEnabled, false);
   assert.deepEqual(await readdir(f.directory), ["memory.v1.json"]);
 });
 
@@ -187,22 +187,20 @@ test("duplicate saves are idempotent within a scope and do not merge different s
   const first = await f.add("user", "Use short answers.");
   const second = await f.add("user", "Use short answers.");
   assert.equal(second.id, first.id);
-  await f.add("project", "Use short answers.");
-  await f.add("session", "Use short answers.");
-  assert.equal((await f.service.state()).entries.length, 3);
+  assert.equal((await f.service.state()).entries.length, 1);
   await f.service.updateSettings({ enabled: true });
   const recalled = await f.recall();
   assert.equal(recalled.memories.length, 1);
-  assert.equal(recalled.memories[0].scope, "session");
+  assert.equal(recalled.memories[0].scope, "user");
 });
 
 test("stale panel context cannot write a draft into the newly selected session", async (t) => {
   const f = await fixture(t);
   const { context } = await f.service.state();
-  const entry = await f.add("session", "Old session note");
+  const entry = await f.add("project", "Old session note");
   f.select("s-two", "/projects/two", "p-two");
-  await rejectsCode(f.service.save({ context, scope: "session", content: "Old draft" }), "MEMORY_CONTEXT_CHANGED");
-  await rejectsCode(f.service.remove({ context, scope: "session", id: entry.id, expectedRevision: entry.revision }), "MEMORY_CONTEXT_CHANGED");
+  await rejectsCode(f.service.save({ context, scope: "project", content: "Old draft" }), "MEMORY_CONTEXT_CHANGED");
+  await rejectsCode(f.service.remove({ context, scope: "project", id: entry.id, expectedRevision: entry.revision }), "MEMORY_CONTEXT_CHANGED");
   assert.deepEqual((await f.service.state()).entries, []);
   f.select("s-one", "/projects/one", "p-one");
   assert.equal((await f.service.state()).entries[0].content, "Old session note");
@@ -241,15 +239,15 @@ test("home and unbound sessions never inherit an unrelated visible workspace", a
   assert.equal(home.context.sessionId, null);
   assert.equal(home.context.projectKey, null);
   await f.add("user", "Global preference");
-  await rejectsCode(f.service.save({ context: home.context, scope: "session", content: "No session" }), "MEMORY_NO_SESSION");
   await rejectsCode(f.service.save({ context: home.context, scope: "project", content: "No project" }), "MEMORY_NO_PROJECT");
 
   f.select("unbound", null);
   f.setWorkspace({ path: "/unrelated/workspace", projectId: "unrelated" });
   assert.equal((await f.service.state()).context.projectKey, null);
-  await f.add("session", "Unbound session note");
+  // Without a project the unrelated workspace must not become the owner.
+  await rejectsCode(f.add("project", "Unbound project note"), "MEMORY_NO_PROJECT");
   await f.service.updateSettings({ enabled: true });
-  assert.deepEqual(new Set(contents(await f.recall())), new Set(["Global preference", "Unbound session note"]));
+  assert.deepEqual(new Set(contents(await f.recall())), new Set(["Global preference"]));
   await rejectsCode(f.recall({ scope: "project" }), "MEMORY_NO_PROJECT");
 });
 
@@ -301,8 +299,8 @@ test("recall limits both record count and content budget and reports omitted mat
   const limited = await f.recall({ limit: 2 });
   assert.equal(limited.memories.length, 2);
   assert.equal(limited.truncated, true);
-  for (let index = 0; index < 5; index++) await f.add("session", `${index}: ${"x".repeat(1990)}`);
-  const long = await f.recall({ scope: "session" });
+  for (let index = 0; index < 5; index++) await f.add("project", `${index}: ${"x".repeat(1990)}`);
+  const long = await f.recall({ scope: "project" });
   assert.ok(long.memories.reduce((sum, entry) => sum + entry.content.length, 0) <= 6000);
   assert.equal(long.truncated, true);
 });
@@ -390,7 +388,7 @@ test("a session switch during storage loading rejects a pending manual save", as
   };
   const save = f.service.save({
     context: { sessionId: "s-one", projectKey: "project:p-one" },
-    scope: "session",
+    scope: "project",
     content: "Draft from the old session",
   });
   const rejected = rejectsCode(save, "MEMORY_CONTEXT_CHANGED");
@@ -464,7 +462,7 @@ test("unload during a host lookup prevents a pending write from committing", asy
     await resumeWorkspace.promise;
     return originalWorkspace();
   };
-  const pending = f.service.execute({ action: "save", scope: "session", content: "Must not survive unload" }, f.toolContext);
+  const pending = f.service.execute({ action: "save", scope: "project", content: "Must not survive unload" }, f.toolContext);
   const rejected = rejectsCode(pending, "MEMORY_UNAVAILABLE");
   await reachedWorkspace.promise;
   const disposed = f.service.dispose();
@@ -501,4 +499,68 @@ test("a failed atomic rename preserves both durable and cached records and clean
   await f.add("user", "Later write succeeds");
   assert.equal((await f.service.state()).entries.length, 2);
   if (process.platform !== "win32") assert.equal((await fs.stat(path)).mode & 0o777, 0o600);
+});
+
+test("a same-title save supersedes the previous entry instead of deleting it", async (t) => {
+  const f = await fixture(t);
+  const { context } = await f.service.state();
+  await f.service.save({ context, scope: "project", title: "Package manager", content: "We use npm." });
+  const second = await f.service.save({ context, scope: "project", title: "Package manager", content: "We use pnpm." });
+  const current = second.entries.find((entry) => entry.content === "We use pnpm.");
+  assert.ok(current);
+
+  // The retired row is no longer active, but it stays on disk as history.
+  assert.equal(second.entries.filter((entry) => entry.title === "Package manager").length, 1);
+  const disk = JSON.parse(await readFile(join(f.directory, "memory.v1.json"), "utf8"));
+  const retired = disk.entries.find((entry) => entry.content === "We use npm.");
+  assert.equal(retired.validUntil !== null, true);
+  assert.equal(retired.supersededBy, current.id);
+
+  await f.service.updateSettings({ enabled: true });
+  assert.deepEqual(contents(await f.recall()), ["We use pnpm."]);
+
+  // Same key and same body is idempotent, so repeats do not grow the file.
+  const third = await f.service.save({ context, scope: "project", title: "Package manager", content: "We use pnpm." });
+  assert.equal(third.entries.filter((entry) => entry.validUntil === null).length, 1);
+});
+
+test("user-level writes from the assistant are proposals the user must confirm", async (t) => {
+  const f = await fixture(t);
+  await f.service.updateSettings({ enabled: true, aiWriteEnabled: true });
+  const result = await f.service.execute({ action: "save", scope: "user", content: "Prefer pnpm everywhere." }, f.toolContext);
+  assert.equal(result.proposed, true);
+  assert.equal(result.proposal.content, "Prefer pnpm everywhere.");
+  assert.equal((await f.service.state()).entries.length, 0);
+
+  // The user writes it from the panel, which is a direct mutation.
+  const { context } = await f.service.state();
+  const saved = await f.service.save({ context, scope: "user", content: "Prefer pnpm everywhere." });
+  assert.equal(saved.entries[0].source, "manual");
+});
+
+test("a version 1 file loses its session entries and keeps user and project ones", async (t) => {
+  const f = await fixture(t);
+  const now = new Date().toISOString();
+  const legacy = {
+    schemaVersion: 1,
+    settings: {
+      enabled: true, userEnabled: true, projectEnabled: true,
+      sessionEnabled: true, aiReadEnabled: true, aiWriteEnabled: true,
+    },
+    entries: [
+      { id: "11111111-1111-1111-1111-111111111111", scope: "user", owner: "local-user", content: "Use concise explanations.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
+      { id: "22222222-2222-2222-2222-222222222222", scope: "project", owner: "project:p-one", content: "This project uses pnpm.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
+      { id: "33333333-3333-3333-3333-333333333333", scope: "session", owner: "s-one", content: "Debugging login.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
+    ],
+  };
+  await writeFile(join(f.directory, "memory.v1.json"), JSON.stringify(legacy));
+
+  const state = await f.service.state();
+  assert.deepEqual(state.entries.map((entry) => entry.content).sort(), ["This project uses pnpm.", "Use concise explanations."]);
+  assert.equal(state.settings.sessionEnabled, undefined);
+  assert.equal(state.entries.every((entry) => entry.validUntil === null), true);
+
+  // Reading a legacy file must not rewrite it until an actual mutation happens.
+  const onDisk = JSON.parse(await readFile(join(f.directory, "memory.v1.json"), "utf8"));
+  assert.equal(onDisk.schemaVersion, 1);
 });

@@ -2,7 +2,23 @@
 
 const { randomUUID } = require("node:crypto");
 const { createStore } = require("./store.js");
-const { LIMITS, fail, fields, settingsPatch, contentText, scopeOwner, visibleEntries, publicEntry, sameContext, recall } = require("./model.js");
+const {
+  SCOPES, LIMITS, fail, fields, settingsPatch, limitsFor, contentText, scopeOwner,
+  visibleEntries, publicEntry, sameContext, isActive, recall,
+} = require("./model.js");
+
+/** Normalizing the title gives a stable key for same-key supersession. */
+function normalizeKey(title) {
+  return String(title ?? "").normalize("NFKC").trim().toLowerCase();
+}
+
+function titleText(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string" || value.length > 200 || value.includes("\0")) {
+    fail("INVALID_INPUT", "Memory title must be at most 200 characters without null bytes.");
+  }
+  return value.trim();
+}
 
 function createMemoryService(api) {
   const store = createStore(() => api.plugin.getDataPath());
@@ -22,73 +38,157 @@ function createMemoryService(api) {
 
   async function context(toolContext) {
     check(toolContext?.signal);
-    if (toolContext && (typeof toolContext.sessionId !== "string" || !toolContext.sessionId)) fail("NO_SESSION", "Memory tools require a host-bound session.");
+    if (toolContext && (typeof toolContext.sessionId !== "string" || !toolContext.sessionId)) {
+      fail("NO_SESSION", "Memory tools require a host-bound session.");
+    }
     const active = await api.session.getActive();
-    if (toolContext && active?.sessionId !== toolContext.sessionId) fail("SESSION_CHANGED", "The invoking session is no longer selected. Retry in that session.");
+    if (toolContext && active?.sessionId !== toolContext.sessionId) {
+      fail("SESSION_CHANGED", "The invoking session is no longer selected. Retry in that session.");
+    }
     if (!active) return { sessionId: null, projectKey: null, projectLabel: null };
     const path = typeof active.projectPath === "string" && active.projectPath ? active.projectPath : null;
     const workspace = path ? await api.workspace.get() : null;
     const after = await api.session.getActive();
     check(toolContext?.signal);
-    if (active.sessionId !== after?.sessionId || active.projectPath !== after?.projectPath) fail(toolContext ? "SESSION_CHANGED" : "CONTEXT_CHANGED", "The selected session changed. Refresh memories before retrying.");
+    if (active.sessionId !== after?.sessionId || active.projectPath !== after?.projectPath) {
+      fail(toolContext ? "SESSION_CHANGED" : "CONTEXT_CHANGED", "The selected session changed. Refresh memories before retrying.");
+    }
     // workspace.get describes the visible workspace, not necessarily this session.
     const matches = path && (workspace?.path === path || workspace?.roots?.some((root) => root.path === path));
     const projectId = matches && typeof workspace.projectId === "string" && workspace.projectId ? workspace.projectId : null;
-    return { sessionId: active.sessionId, projectKey: path ? projectId ? `project:${projectId}` : `path:${path}` : null,
-      projectLabel: path ? matches && workspace.name ? workspace.name : path : null };
+    return {
+      sessionId: active.sessionId,
+      projectKey: path ? (projectId ? `project:${projectId}` : `path:${path}`) : null,
+      projectLabel: path ? (matches && workspace.name ? workspace.name : path) : null,
+    };
   }
 
   function snapshot(data, bound) {
-    return { ok: true, settings: { ...data.settings }, context: { ...bound },
-      entries: visibleEntries(data.entries, bound).map(publicEntry), limits: { contentChars: LIMITS.contentChars } };
+    return {
+      ok: true,
+      settings: { ...data.settings },
+      context: { ...bound },
+      entries: visibleEntries(data.entries, bound).filter(isActive).map(publicEntry),
+      limits: {
+        user: limitsFor("user"),
+        project: limitsFor("project"),
+      },
+    };
   }
 
   async function guard(bound, toolContext) {
     check(toolContext?.signal);
     const current = await context(toolContext);
-    if (!sameContext(bound, current)) fail("CONTEXT_CHANGED", "The selected session or project changed. Refresh memories before retrying.");
+    if (!sameContext(bound, current)) {
+      fail("CONTEXT_CHANGED", "The selected session or project changed. Refresh memories before retrying.");
+    }
   }
 
   function requireRevision(args, entry) {
-    if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision !== entry.revision) fail("CONFLICT", "This memory changed. Refresh it before editing or deleting.");
+    if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision !== entry.revision) {
+      fail("CONFLICT", "This memory changed. Refresh it before editing or deleting.");
+    }
+  }
+
+  function findOwned(data, args, owner) {
+    return data.entries.findIndex((entry) => entry.id === args.id
+      && entry.scope === args.scope && entry.owner === owner);
+  }
+
+  /** Retire an entry without deleting it, so history and rollback survive. */
+  function supersede(entry, byId, now) {
+    entry.validUntil = now;
+    entry.supersededBy = byId;
+    entry.updatedAt = now;
   }
 
   function change(data, args, bound, source, remove) {
     const owner = scopeOwner(args.scope, bound);
-    if (args.id !== undefined && (typeof args.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.id))) fail("INVALID_INPUT", "Invalid memory ID.");
+    const limits = limitsFor(args.scope);
+    if (args.id !== undefined && (typeof args.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(args.id))) {
+      fail("INVALID_INPUT", "Invalid memory ID.");
+    }
     if (remove && !args.id) fail("INVALID_INPUT", "A memory ID is required for deletion.");
+    const now = new Date().toISOString();
+
     if (args.id) {
-      const index = data.entries.findIndex((entry) => entry.id === args.id && entry.scope === args.scope && entry.owner === owner);
+      const index = findOwned(data, args, owner);
       if (index < 0) fail("NOT_FOUND", "No memory with that ID exists in this scope.");
       const entry = data.entries[index];
       requireRevision(args, entry);
-      if (remove) { data.entries.splice(index, 1); return { id: entry.id, deleted: true }; }
-      const content = contentText(args.content);
-      if (data.entries.some((other) => other.id !== entry.id && other.scope === args.scope && other.owner === owner && other.content === content)) fail("CONFLICT", "This scope already contains that memory.");
-      const updated = { ...entry, content, revision: entry.revision + 1, updatedAt: new Date().toISOString(), source };
+      if (remove) {
+        supersede(entry, null, now);
+        return { id: entry.id, deleted: true };
+      }
+      const content = contentText(args.content, args.scope);
+      const title = args.title === undefined ? entry.title ?? "" : titleText(args.title);
+      const duplicate = data.entries.some((other) => other.id !== entry.id && other.scope === args.scope
+        && other.owner === owner && isActive(other) && other.content === content);
+      if (duplicate) fail("CONFLICT", "This scope already contains that memory.");
+      const updated = { ...entry, title, content, revision: entry.revision + 1, updatedAt: now, source };
       data.entries[index] = updated;
       return publicEntry(updated);
     }
+
     if (args.expectedRevision !== undefined) fail("INVALID_INPUT", "A revision requires a memory ID.");
-    const content = contentText(args.content);
-    const owned = data.entries.filter((entry) => entry.scope === args.scope && entry.owner === owner);
-    const duplicate = owned.find((entry) => entry.content === content);
-    if (duplicate) return publicEntry(duplicate);
-    if (data.entries.length >= LIMITS.entries || owned.length >= LIMITS.perOwner) fail("CAPACITY", "This memory store is full. Remove unused records first.");
-    const now = new Date().toISOString();
-    const entry = { id: randomUUID(), scope: args.scope, owner, content, revision: 1, source, createdAt: now, updatedAt: now };
+    const content = contentText(args.content, args.scope);
+    const title = titleText(args.title);
+    const key = normalizeKey(title);
+    const owned = data.entries.filter((entry) => entry.scope === args.scope
+      && entry.owner === owner && isActive(entry));
+
+    // Same key + same body is idempotent; same key + different body supersedes.
+    const sameKey = key ? owned.filter((entry) => normalizeKey(entry.title) === key) : [];
+    const identical = owned.find((entry) => entry.content === content);
+    if (identical && (!key || sameKey.some((entry) => entry.id === identical.id))) return publicEntry(identical);
+
+    const totalChars = owned.reduce((sum, entry) => sum + entry.content.length, 0);
+    if (owned.length >= limits.entries || totalChars + content.length > limits.totalChars) {
+      fail("CAPACITY", `This memory level is full (${limits.entries} entries / ${limits.totalChars} characters). Remove or supersede records first.`);
+    }
+
+    const entry = {
+      id: randomUUID(), scope: args.scope, owner, title, content,
+      revision: 1, source, createdAt: now, updatedAt: now,
+      validUntil: null, supersededBy: null,
+    };
+    for (const stale of sameKey) supersede(stale, entry.id, now);
     data.entries.push(entry);
     return publicEntry(entry);
   }
 
   async function manual(args, remove) {
-    fields(args, remove ? ["context", "scope", "id", "expectedRevision"] : ["context", "scope", "id", "expectedRevision", "content"]);
+    fields(args, remove
+      ? ["context", "scope", "id", "expectedRevision"]
+      : ["context", "scope", "id", "expectedRevision", "content", "title"]);
     const bound = await context();
-    if (!sameContext(args.context, bound)) fail("CONTEXT_CHANGED", "The selected session or project changed. Refresh memories before retrying.");
+    if (!sameContext(args.context, bound)) {
+      fail("CONTEXT_CHANGED", "The selected session or project changed. Refresh memories before retrying.");
+    }
     const data = await store.read();
     change(data, args, bound, "manual", remove);
     await store.write(data, () => guard(bound));
     return snapshot(data, bound);
+  }
+
+  /**
+   * User-level memories shape every future conversation, so the assistant may
+   * only propose them. The proposal returns to the caller and the user writes it
+   * through the panel, which keeps a bad guess from leaking everywhere.
+   */
+  function propose(data, args, bound) {
+    const owner = scopeOwner("user", bound);
+    const content = contentText(args.content, "user");
+    const title = titleText(args.title);
+    const duplicate = data.entries.some((entry) => entry.scope === "user" && entry.owner === owner
+      && isActive(entry) && entry.content === content);
+    if (duplicate) return { ok: true, duplicate: true, proposal: { title, content, scope: "user" } };
+    return {
+      ok: true,
+      proposed: true,
+      proposal: { title, content, scope: "user" },
+      note: "User memory can only be written by the user. This proposal was returned for confirmation, not saved.",
+    };
   }
 
   return {
@@ -109,14 +209,20 @@ function createMemoryService(api) {
     save: (args) => serial(() => manual(args, false)),
     remove: (args) => serial(() => manual(args, true)),
     execute: (args, ctx) => serial(async () => {
-      fields(args, ["action", "scope", "query", "limit", "content", "id", "expectedRevision"]);
+      fields(args, ["action", "scope", "query", "limit", "content", "title", "id", "expectedRevision"]);
       if (!["recall", "save", "delete"].includes(args.action)) fail("INVALID_INPUT", "Unknown memory action.");
       const read = args.action === "recall";
-      fields(args, read ? ["action", "scope", "query", "limit"] : args.action === "save" ? ["action", "scope", "content", "id", "expectedRevision"] : ["action", "scope", "id", "expectedRevision"]);
+      fields(args, read
+        ? ["action", "scope", "query", "limit"]
+        : args.action === "save"
+          ? ["action", "scope", "content", "title", "id", "expectedRevision"]
+          : ["action", "scope", "id", "expectedRevision"]);
       const bound = await context(ctx ?? {});
       const data = await store.read();
       if (!data.settings.enabled) fail("DISABLED", "Memory is turned off. The user can enable it in Enhancements settings.");
-      if (!data.settings[read ? "aiReadEnabled" : "aiWriteEnabled"]) fail("DISABLED", read ? "AI memory recall is turned off." : "AI memory writes are turned off. Use manual memory management instead.");
+      if (!data.settings[read ? "aiReadEnabled" : "aiWriteEnabled"]) {
+        fail("DISABLED", read ? "AI memory recall is turned off." : "AI memory writes are turned off. Use manual memory management instead.");
+      }
       if (!read && ctx?.mode && ctx.mode !== "agent") fail("DISABLED", "Memory writes require Agent mode.");
       if (read) {
         const result = recall(data.entries, bound, data.settings, args);
@@ -125,6 +231,8 @@ function createMemoryService(api) {
       }
       scopeOwner(args.scope, bound);
       if (!data.settings[`${args.scope}Enabled`]) fail("SCOPE_DISABLED", "This memory level is disabled.");
+      // A user-level write from the assistant is a proposal, never a mutation.
+      if (args.scope === "user" && args.action === "save") return propose(data, args, bound);
       const result = change(data, args, bound, "ai", args.action === "delete");
       await store.write(data, () => guard(bound, ctx));
       return { ok: true, memory: result };

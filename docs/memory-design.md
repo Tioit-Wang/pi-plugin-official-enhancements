@@ -79,27 +79,39 @@ always-present core memory blocks.
 - Project owner is `project:<host-project-id>` when the selected session path
   matches the host workspace or a registered group root. A host without that
   matching identity uses `path:<full-project-path>`.
-- Session owner is the trusted host session ID. Missing context never maps to
-  an `unknown` shared bucket or an unrelated visible workspace.
+- The session level is deliberately absent. Mid-task context already lives in
+  the transcript; a second copy only added staleness, and it shared a key with
+  the session-switch race. Only user and project levels exist.
+- Missing context never maps to an `unknown` shared bucket or an unrelated
+  visible workspace.
 - AI execution requires a host-bound session and that session must remain
-  selected. The panel carries its displayed context on mutations; stale
+  selected. The panel carries its displayed project context on mutations; stale
   contexts are refused. Asynchronous host reads are checked again before use.
-- Master enablement, three level switches, AI reads, and AI writes are distinct
+- Master enablement, two level switches, AI reads, and AI writes are distinct
   booleans. The master and AI writes default off. Successful switch changes
   apply to all following operations in the serialized queue.
 - Disabled memory remains editable in the manager. Switching off stops future
   tool reads/writes; it cannot retract text already returned into a transcript.
 - AI writes are denied in Plan/Goal. Only `recall` is declared plan-safe.
+- A user-level `save` from the assistant returns a proposal instead of mutating.
+  Only the panel writes user memory, because a user preference shapes every
+  future conversation and a wrong guess must not leak into all of them. Project
+  writes from the assistant are direct and marked `source: ai`.
 
 ### Persistence and errors
 
 `memory.v1.json` is ordinary private JSON, not a secret store. Its schema is:
 
 ```text
-schemaVersion: 1
-settings: six boolean switches
-entries: [{id, scope, owner, content, revision, source, createdAt, updatedAt}]
+schemaVersion: 2
+settings: five boolean switches
+entries: [{id, scope, owner, title, content, revision, source,
+            createdAt, updatedAt, validUntil, supersededBy}]
 ```
+
+`createdAt`/`updatedAt` record when we wrote the entry; `validUntil` records
+when it stopped applying. The two axes never overwrite each other, so a retired
+row can still answer "what did we believe then".
 
 The service serializes settings, reads, and writes to avoid stale snapshots.
 It writes a unique mode-0600 temporary file in the same directory, syncs its
@@ -117,33 +129,49 @@ original enhancement settings remain in their existing settings record.
 There is no migration of the host database or existing enhancement settings.
 
 Updates and deletions require the currently visible ID, exact scope/owner, and
-expected revision. Duplicate additions in one owner scope are idempotent.
-Cross-owner guessed IDs do not grant access. Atomic writes leave neither the
-cache nor the file reporting an uncommitted mutation.
+expected revision. Duplicate additions in one owner scope are idempotent. A
+save whose label matches an active entry at the same level supersedes it: the
+old row gets `validUntil = now` and `supersededBy = <new id>` and stays on disk,
+while recall and the panel show active rows only. Deletion is the same
+mechanism with a null successor, so nothing is destroyed. Cross-owner guessed
+IDs do not grant access. Atomic writes leave neither the cache nor the file
+reporting an uncommitted mutation.
 
 ### Retrieval and trust
 
-Retrieval first filters exact scope/owner and enabled levels, then orders by
-session/project/user, lexical match score, descending update time, and stable
-ID. English words and Chinese bigrams are normalized for matching. This is
-lexical search; synonyms require an appropriate query. Empty queries list
+Retrieval first filters exact scope/owner, active rows, and enabled levels, then
+orders by project/user level, lexical match score, descending update time, and
+stable ID. English words and Chinese bigrams are normalized for matching. This
+is lexical search; synonyms require an appropriate query. Empty queries list
 recent entries within level order. Exact duplicate content is omitted from
 combined recall. Conflicting statements remain visible rather than being
 semantically rewritten.
 
-Limits: 2,000 UTF-16 code units per entry, 100 records per owner scope, 500 total,
-4 MiB serialized file, 512 query characters, 20 recall entries and 6,000 content
-characters (default 10 entries). `truncated` reports omitted matching records;
-JSON metadata is additional to the content budget. No memory text is promoted
-to a system role, evaluated, or rendered as HTML. Tool guidance explains that
-current user instructions override stored facts. Model selection and writing
-quality remain model dependent.
+Limits are per level, because a user entry is far more expensive than a project
+entry: 500 UTF-16 code units and 50 entries / 4,000 characters for the profile,
+2,000 code units and 100 entries / 32 KB per project. A recall returns 512 query
+characters maximum, 20 entries and 6,000 content characters (default 10).
+`truncated` reports omitted matching records; JSON metadata is additional to the
+content budget. Exceeding a level's capacity is an explicit `MEMORY_CAPACITY`
+error rather than silent truncation. No memory text is promoted to a system
+role, evaluated, or rendered as HTML. Tool guidance explains that current user
+instructions override stored facts. Model selection and writing quality remain
+model dependent.
 
 Changing an old host's path-based project identity, moving its project folder,
 or switching to host group IDs does not migrate records automatically. Old
 entries stay in the private file; a future identity migration must preserve
-them explicitly. Session records persist until manually deleted or the plugin
-is uninstalled; there is no TTL or automatic deletion hook.
+them explicitly. Project records persist until superseded or the plugin is
+uninstalled; there is no TTL or automatic deletion hook.
+
+### Version 1 migration
+
+A 0.7.0 file carries `schemaVersion: 1`, a session level, and a
+`sessionEnabled` switch. Loading one drops the session entries and that switch,
+keeps user and project rows, and adds empty `title`, `validUntil`, and
+`supersededBy` fields. The upgrade happens in memory; the file is rewritten only
+when the next mutation succeeds, so reading never destroys the original. An
+unknown or corrupt version still fails closed with a visible error.
 
 ## Acceptance and verification
 
@@ -167,21 +195,26 @@ has a 60-second bound; the Electron child is killed after 55 seconds.
 Representative scenarios:
 
 1. In settings, manually save one record at each level while AI is off. Enable
-   recall, retrieve the three levels, enable writes, then update/delete through
-   the AI tool and verify the same manager shows the result.
-2. Change session within a project: retain user/project entries, exclude the
-   other session. Change project: retain only user entries. Group roots share
-   host identity; same-named unrelated paths remain separate.
-3. Disable any level, recall, or writes, then repeat tool calls. Disabled data
+   recall, retrieve both levels, enable writes, then update/delete through the
+   AI tool and verify the same manager shows the result.
+2. Change project: retain only user entries. Group roots share host identity;
+   same-named unrelated paths remain separate. A session with no project gets
+   `MEMORY_NO_PROJECT` and never inherits an unrelated visible workspace.
+3. Save twice with the same label: recall and the panel show only the new body,
+   while the file keeps the retired row with `validUntil` and `supersededBy`.
+4. Ask the assistant to save at user level with AI writes on: it returns a
+   proposal and the store is unchanged until the user accepts it in settings.
+5. Disable any level, recall, or writes, then repeat tool calls. Disabled data
    is excluded/refused while manual management continues to work.
-4. Save concurrently, edit with a stale revision, supply guessed foreign IDs,
+6. Save concurrently, edit with a stale revision, supply guessed foreign IDs,
    switch context during an await, cancel queued/in-flight work, or unload.
    No operation lands in another scope or corrupts later queue operations.
-5. Restart the plugin and recall durable records. Corrupt/future-version files
-   are preserved on error; failed rename retains old disk/cache state.
-6. In the renderer, add/edit/search/delete with confirmation; verify empty
+7. Restart the plugin and recall durable records. A 0.7.0 file loses only its
+   session rows; corrupt/future-version files are preserved on error; a failed
+   rename retains old disk/cache state.
+8. In the renderer, add/edit/search/delete with confirmation; verify empty
    states, independent switches, save errors, context clearing, unavailable
-   scopes, late response rejection, missing grant guidance, EN/zh-CN locale
+   levels, late response rejection, missing grant guidance, EN/zh-CN locale
    changes, text escaping, and listener cleanup.
 
 Live installed-plugin/provider behavior is a separate manual acceptance step:
