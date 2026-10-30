@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.1 — 2026-10-30
+
+- Key a project by its normalized folder path, the same key the sidebar uses to
+  group sessions. Project groups are no longer consulted, so the panel and the
+  sidebar show one grouping instead of two: `F:\PI-Desktop`, `F:/PI-Desktop/` and
+  the Windows extended-length form all resolve to one project.
+- Keep 0.9.0 records that were keyed by a group id visible for their own folder,
+  so the key change does not hide existing memories.
+
 ## 0.9.0 — 2026-10-30
 
 - Give pending user-level proposals a home. The assistant could only suggest

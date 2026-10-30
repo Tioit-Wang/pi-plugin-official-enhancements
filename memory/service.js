@@ -4,7 +4,7 @@ const { randomUUID } = require("node:crypto");
 const { createStore } = require("./store.js");
 const {
   SCOPES, LIMITS, fail, fields, settingsPatch, limitsFor, contentText, scopeOwner,
-  visibleEntries, publicEntry, sameContext, isActive, recall,
+  visibleEntries, publicEntry, sameContext, isActive, recall, normalizeProjectPath, projectOwner,
 } = require("./model.js");
 
 /** Normalizing the title gives a stable key for same-key supersession. */
@@ -47,21 +47,32 @@ function createMemoryService(api) {
     if (toolContext && active?.sessionId !== toolContext.sessionId) {
       fail("SESSION_CHANGED", "The invoking session is no longer selected. Retry in that session.");
     }
-    if (!active) return { sessionId: null, projectKey: null, projectLabel: null };
+    if (!active) return { sessionId: null, projectKey: null, projectLabel: null, legacyProjectIds: [] };
     const path = typeof active.projectPath === "string" && active.projectPath ? active.projectPath : null;
+    // The owner key is the sidebar's grouping key, so the panel groups projects
+    // exactly as the sidebar does. A label is cosmetic and never a key.
+    const projectKey = projectOwner(path);
     const workspace = path ? await api.workspace.get() : null;
     const after = await api.session.getActive();
     check(toolContext?.signal);
     if (active.sessionId !== after?.sessionId || active.projectPath !== after?.projectPath) {
       fail(toolContext ? "SESSION_CHANGED" : "CONTEXT_CHANGED", "The selected session changed. Refresh memories before retrying.");
     }
-    // workspace.get describes the visible workspace, not necessarily this session.
-    const matches = path && (workspace?.path === path || workspace?.roots?.some((root) => root.path === path));
-    const projectId = matches && typeof workspace.projectId === "string" && workspace.projectId ? workspace.projectId : null;
+    const sameFolder = workspace && normalizeProjectPath(workspace.path) === normalizeProjectPath(path);
+    const label = sameFolder && workspace.name
+      ? workspace.name
+      : (path ? path.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? path : null);
+    // Earlier releases keyed a project by its group id. Those owners cannot be
+    // resolved from a path, so a group id is only usable while this folder is
+    // the visible one; it is retired on the next write rather than left to rot.
+    const legacyProjectIds = sameFolder && typeof workspace.projectId === "string" && workspace.projectId
+      ? [`project:${workspace.projectId}`]
+      : [];
     return {
       sessionId: active.sessionId,
-      projectKey: path ? (projectId ? `project:${projectId}` : `path:${path}`) : null,
-      projectLabel: path ? (matches && workspace.name ? workspace.name : path) : null,
+      projectKey,
+      projectLabel: projectKey ? label : null,
+      legacyProjectIds,
     };
   }
 

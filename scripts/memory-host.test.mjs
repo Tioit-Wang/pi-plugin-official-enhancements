@@ -94,7 +94,7 @@ test("panel management and the declared agent tool share durable memory through 
   // A deleted entry stays on disk as superseded history rather than vanishing.
   assert.equal(disk.entries.length, 2);
   assert.equal(disk.entries.filter((entry) => entry.validUntil === null).length, 1);
-  assert.equal(disk.entries.find((entry) => entry.scope === "project").owner, "project:project-1");
+  assert.equal(disk.entries.find((entry) => entry.scope === "project").owner, "path:/repo");
 
   await plugin.onUnload();
   globalThis.pi.agent.registerTool = async () => { throw Object.assign(new Error("Tool permission not granted"), { code: "PERMISSION_DENIED" }); };

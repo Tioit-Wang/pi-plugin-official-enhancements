@@ -74,7 +74,7 @@ test("manual management, AI recall/write, isolation, disablement and restart for
   const initial = await f.service.state();
   assert.deepEqual(initial.settings, DEFAULT_SETTINGS);
   assert.deepEqual(initial.entries, []);
-  assert.equal(initial.context.projectKey, "project:p-one");
+  assert.equal(initial.context.projectKey, "path:/projects/one");
   assert.equal(initial.limits.project.contentChars, 2000);
 
   await f.add("user", "Use concise explanations.");
@@ -225,7 +225,7 @@ test("AI identity comes only from the invocation context", async (t) => {
   await f.service.updateSettings({ enabled: true, aiWriteEnabled: true });
   await rejectsCode(f.service.execute({ action: "recall" }, { sessionId: "different-session" }), "MEMORY_SESSION_CHANGED");
   await rejectsCode(f.service.execute({ action: "recall" }, {}), "MEMORY_NO_SESSION");
-  for (const [key, value] of [["sessionId", "s-one"], ["projectId", "p-one"], ["owner", "user"], ["projectKey", "project:p-one"]]) {
+  for (const [key, value] of [["sessionId", "s-one"], ["projectId", "p-one"], ["owner", "user"], ["projectKey", "path:/projects/one"]]) {
     await rejectsCode(f.recall({ [key]: value }), "MEMORY_INVALID_INPUT");
   }
   assert.deepEqual((await f.service.state()).entries, []);
@@ -253,14 +253,19 @@ test("home and unbound sessions never inherit an unrelated visible workspace", a
 
 test("project groups share a stable host identity and same-named paths remain distinct", async (t) => {
   const f = await fixture(t);
+  // Each folder is its own project, exactly as the sidebar groups them, so a
+  // sibling root of the same group does not inherit this folder's memories.
   f.select("s-one", "/groups/root-a", "group");
   const roots = [{ path: "/groups/root-a", primary: true }, { path: "/groups/root-b", primary: false }];
   f.setWorkspace({ path: "/groups/root-a", projectId: "group", roots });
-  await f.add("project", "Shared group rule");
+  await f.add("project", "Root A rule");
   f.select("s-two", "/groups/root-b", "group");
   f.setWorkspace({ path: "/groups/root-a", projectId: "group", roots });
-  assert.equal((await f.service.state()).context.projectKey, "project:group");
-  assert.equal((await f.service.state()).entries[0].content, "Shared group rule");
+  assert.equal((await f.service.state()).context.projectKey, "path:/groups/root-b");
+  assert.deepEqual((await f.service.state()).entries, []);
+  f.select("s-three", "/groups/root-a", "group");
+  f.setWorkspace({ path: "/groups/root-a", projectId: "group", roots });
+  assert.equal((await f.service.state()).entries[0].content, "Root A rule");
 
   f.select("path-one", "/work/one/repo");
   assert.equal((await f.service.state()).context.projectKey, "path:/work/one/repo");
@@ -387,7 +392,7 @@ test("a session switch during storage loading rejects a pending manual save", as
     return f.directory;
   };
   const save = f.service.save({
-    context: { sessionId: "s-one", projectKey: "project:p-one" },
+    context: { sessionId: "s-one", projectKey: "path:/projects/one" },
     scope: "project",
     content: "Draft from the old session",
   });
@@ -549,7 +554,7 @@ test("a version 1 file loses its session entries and keeps user and project ones
     },
     entries: [
       { id: "11111111-1111-1111-1111-111111111111", scope: "user", owner: "local-user", content: "Use concise explanations.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
-      { id: "22222222-2222-2222-2222-222222222222", scope: "project", owner: "project:p-one", content: "This project uses pnpm.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
+      { id: "22222222-2222-2222-2222-222222222222", scope: "project", owner: "path:/projects/one", content: "This project uses pnpm.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
       { id: "33333333-3333-3333-3333-333333333333", scope: "session", owner: "s-one", content: "Debugging login.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
     ],
   };
@@ -620,4 +625,42 @@ test("accepting a proposal supersedes an entry with the same label", async (t) =
   const active = after.entries.filter((entry) => entry.validUntil === null);
   assert.equal(active.length, 1);
   assert.equal(active[0].content, "叫我王哥");
+});
+
+test("one folder is one project however the host spells its path", async (t) => {
+  const f = await fixture(t);
+  await f.service.updateSettings({ enabled: true });
+  f.select("s-one", "F:\\PI-Desktop", undefined);
+  assert.equal((await f.service.state()).context.projectKey, "path:F:/PI-Desktop");
+  await f.add("project", "Windows form");
+
+  // Same folder, forward slashes and a trailing separator: the sidebar treats
+  // these as one project, so the memory owner must agree.
+  f.select("s-two", "F:/PI-Desktop/", undefined);
+  assert.equal((await f.service.state()).context.projectKey, "path:F:/PI-Desktop");
+  assert.deepEqual(contents(await f.recall({ scope: "project" })).length ? 
+    (await f.recall({ scope: "project" })).memories.map((m) => m.content) : [], ["Windows form"]);
+
+  // The extended-length prefix is the same folder too.
+  f.select("s-three", "//?/F:/PI-Desktop", undefined);
+  assert.equal((await f.service.state()).context.projectKey, "path:F:/PI-Desktop");
+});
+
+test("a record keyed by an old group id stays visible for its own folder", async (t) => {
+  const f = await fixture(t);
+  f.select("s-one", "/work/repo", "group-1");
+  f.setWorkspace({ path: "/work/repo", projectId: "group-1" });
+  await f.add("project", "Kept across the key change");
+
+  // Rewrite the owner the way 0.9.0 stored it, then read it back through the
+  // path key. The legacy owner is accepted only while this folder is visible.
+  const file = join(f.directory, "memory.v1.json");
+  const doc = JSON.parse(await readFile(file, "utf8"));
+  for (const entry of doc.entries) if (entry.scope === "project") entry.owner = "project:group-1";
+  await writeFile(file, JSON.stringify(doc));
+  await f.restart();
+  await f.service.updateSettings({ enabled: true });
+  f.select("s-one", "/work/repo", "group-1");
+  f.setWorkspace({ path: "/work/repo", projectId: "group-1" });
+  assert.deepEqual(contents(await f.recall({ scope: "project" })), ["Kept across the key change"]);
 });

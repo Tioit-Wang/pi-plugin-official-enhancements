@@ -7,8 +7,39 @@
  *
  * Retention order is user before project: a user preference outranks a project
  * fact when they conflict, matching the trust boundary the tool describes.
+ * Retention order is user before project: a user preference outranks a project
+ * fact when they conflict, matching the trust boundary the tool describes.
+ *
+ * A project's identity is its normalized folder path, exactly as the host's own
+ * sidebar groups projects. The sidebar is what a user compares the memory list
+ * against, so using a different key here would show one grouping in the sidebar
+ * and another in this panel. Project groups are deliberately not consulted: the
+ * sidebar treats each folder as its own project, and two folders of one group
+ * keep separate memories.
  */
 const SCOPES = Object.freeze(["user", "project"]);
+
+/**
+ * Mirror of the host's `normalizeProjectPath` (apps/desktop/src/lib/
+ * sidebar-preferences.ts). Windows separators become `/`, the extended-length
+ * prefix is stripped, and trailing slashes go except after a drive letter. The
+ * result is the sidebar's grouping key, so the same folder always resolves to
+ * the same owner no matter which form the host reported.
+ */
+function normalizeProjectPath(projectPath) {
+  const value = typeof projectPath === "string" ? projectPath.trim() : "";
+  if (!value) return null;
+  let normalized = value.replace(/\\/g, "/");
+  if (/^\/\/\?\/[A-Za-z]:\//.test(normalized)) normalized = normalized.slice(4);
+  normalized = normalized.replace(/(?<![A-Za-z]:)\/+$/, "");
+  return normalized || "/";
+}
+
+/** The owner key for one project folder, prefixed so it cannot collide. */
+function projectOwner(projectPath) {
+  const normalized = normalizeProjectPath(projectPath);
+  return normalized ? `path:${normalized}` : null;
+}
 const LIMITS = Object.freeze({
   // User memory is injected in full every turn, so it stays small.
   userContentChars: 500,
@@ -69,9 +100,13 @@ function scopeOwner(scope, context) {
 }
 
 function visibleEntries(entries, context) {
+  // A project owner match accepts the current folder key plus any legacy group
+  // key that still resolves to this folder, so 0.9.0 records stay visible until
+  // the next write folds them onto the path key.
+  const owners = new Set([context.projectKey, ...(context.legacyProjectIds ?? [])].filter(Boolean));
   return entries.filter((entry) => entry.scope === "user"
     ? entry.owner === "local-user"
-    : Boolean(context.projectKey) && entry.owner === context.projectKey);
+    : owners.size > 0 && owners.has(entry.owner));
 }
 
 function publicEntry(entry) {
@@ -194,4 +229,4 @@ function recall(entries, context, settings, args) {
   };
 }
 
-module.exports = { SCOPES, LIMITS, DEFAULTS, fail, fields, settingsPatch, limitsFor, contentText, scopeOwner, visibleEntries, publicEntry, sameContext, isActive, validateDocument, recall };
+module.exports = { SCOPES, LIMITS, DEFAULTS, fail, fields, settingsPatch, limitsFor, contentText, scopeOwner, visibleEntries, publicEntry, sameContext, isActive, validateDocument, recall, normalizeProjectPath, projectOwner };

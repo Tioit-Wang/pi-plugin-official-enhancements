@@ -146,10 +146,19 @@ history. Manual management works even while AI memory is off.
 | Level | Visibility | Written by |
 |---|---|---|
 | User | All projects and sessions in the same local PI profile | The user only; the assistant may propose an entry |
-| Project | Sessions in the current host project group; absolute project path on hosts without group IDs | The user or the assistant |
+| Project | One project folder, matched exactly as the sidebar groups projects | The user or the assistant |
 
 There is no session level. Mid-task context already lives in the transcript, so
 a second copy only adds staleness.
+
+A project's identity is its normalized folder path — the same key the sidebar
+uses to group sessions: backslashes become `/`, the Windows extended-length
+prefix is stripped, and trailing slashes go except after a drive letter. So
+`F:\PI-Desktop`, `F:/PI-Desktop/` and `//?/F:/PI-Desktop` are one project with
+one set of memories. Project groups are deliberately not used as the key: the
+sidebar treats each folder as its own project, and two folders of one group keep
+separate memories. Records written by 0.9.0 under a group id stay visible for
+their own folder until the next write folds them onto the path key.
 
 Use **Use memory** to allow the AI to use memories, then select the available
 levels. **AI recall** and **AI write** have independent switches. Level switches
