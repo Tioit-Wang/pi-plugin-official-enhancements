@@ -76,9 +76,15 @@ always-present core memory blocks.
 ### Ownership and switches
 
 - User owner is `local-user`, within the current plugin-private PI profile.
-- Project owner is `project:<host-project-id>` when the selected session path
-  matches the host workspace or a registered group root. A host without that
-  matching identity uses `path:<full-project-path>`.
+- Project owner is `path:<normalized-project-path>`, where normalization is the
+  host sidebar's own rule: slashes are unified, the Windows extended-length
+  prefix is stripped, and trailing slashes go except after a drive letter. Two
+  spellings of one folder are therefore one owner. Project groups are not
+  consulted: the sidebar treats each folder as its own project, so two roots of
+  one group keep separate memories.
+- A record written by 0.9.0 under `project:<group-id>` stays visible for the
+  folder that owns it, matched only while that folder is the visible workspace.
+  It is not reassigned automatically.
 - The session level is deliberately absent. Mid-task context already lives in
   the transcript; a second copy only added staleness, and it shared a key with
   the session-switch race. Only user and project levels exist.
@@ -95,18 +101,25 @@ always-present core memory blocks.
 - AI writes are denied in Plan/Goal. Only `recall` is declared plan-safe.
 - A user-level `save` from the assistant returns a proposal instead of mutating.
   Only the panel writes user memory, because a user preference shapes every
-  future conversation and a wrong guess must not leak into all of them. Project
-  writes from the assistant are direct and marked `source: ai`.
-
-### Persistence and errors
+- A user-level `save` from the assistant is a proposal, never a mutation. The
+  proposal is stored in the document's `proposals` list and appears under
+  **Awaiting your confirmation** in the panel, so it survives a reload instead of
+  vanishing with the tool result that carried it. The user saves or dismisses it;
+  accepting writes a normal `source: manual` entry and supersedes a same-label
+  entry. This exists because a user preference shapes every future conversation.
+  Project writes from the assistant are direct and marked `source: ai`.
+- At most 20 proposals are held. Repeating the same content returns the pending
+  proposal instead of queueing a second copy. Accepting a proposal that already
+  matches an active entry discards the proposal rather than duplicating it.
 
 `memory.v1.json` is ordinary private JSON, not a secret store. Its schema is:
 
 ```text
-schemaVersion: 2
+schemaVersion: 3
 settings: five boolean switches
 entries: [{id, scope, owner, title, content, revision, source,
             createdAt, updatedAt, validUntil, supersededBy}]
+proposals: [{id, title, content, createdAt}]
 ```
 
 `createdAt`/`updatedAt` record when we wrote the entry; `validUntil` records
@@ -158,20 +171,27 @@ role, evaluated, or rendered as HTML. Tool guidance explains that current user
 instructions override stored facts. Model selection and writing quality remain
 model dependent.
 
-Changing an old host's path-based project identity, moving its project folder,
-or switching to host group IDs does not migrate records automatically. Old
-entries stay in the private file; a future identity migration must preserve
-them explicitly. Project records persist until superseded or the plugin is
-uninstalled; there is no TTL or automatic deletion hook.
+Moving a project folder, or opening one folder through a path spelling that
+normalization cannot collapse (a symlink, a different drive mapping), produces a
+new owner and does not migrate records automatically. Old entries stay in the
+private file under their previous owner; a future identity migration must
+preserve them explicitly. Project records persist until superseded or the plugin
+is uninstalled; there is no TTL or automatic deletion hook.
 
-### Version 1 migration
+### Version migration
 
-A 0.7.0 file carries `schemaVersion: 1`, a session level, and a
-`sessionEnabled` switch. Loading one drops the session entries and that switch,
-keeps user and project rows, and adds empty `title`, `validUntil`, and
-`supersededBy` fields. The upgrade happens in memory; the file is rewritten only
-when the next mutation succeeds, so reading never destroys the original. An
-unknown or corrupt version still fails closed with a visible error.
+Each version is a step, applied in order, so any older file reaches the current
+shape:
+
+| On disk | Becomes | What changes |
+|---|---|---|
+| 1 | 2 | Session entries and `sessionEnabled` are dropped; `title`, `validUntil`, `supersededBy` are added |
+| 2 | 3 | `proposals` starts empty |
+
+A 0.7.0 file is therefore reshaped to v2 and then to v3 in one load. The upgrade
+happens in memory; the file is rewritten only when the next mutation succeeds, so
+reading never destroys the original. An unknown or corrupt version still fails
+closed with a visible error.
 
 ## Acceptance and verification
 
