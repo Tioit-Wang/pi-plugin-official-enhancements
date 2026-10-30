@@ -1,6 +1,6 @@
 # Scoped memory design and source analysis
 
-Status: implemented in plugin 0.7.0. Research checked on 2026-10-30
+Status: implemented in plugin 0.9.1. Research checked on 2026-10-30
 (Asia/Shanghai). This plugin changes no PI host database, IPC, or SDK contract.
 
 ## Research
@@ -82,9 +82,6 @@ always-present core memory blocks.
   spellings of one folder are therefore one owner. Project groups are not
   consulted: the sidebar treats each folder as its own project, so two roots of
   one group keep separate memories.
-- A record written by 0.9.0 under `project:<group-id>` stays visible for the
-  folder that owns it, matched only while that folder is the visible workspace.
-  It is not reassigned automatically.
 - The session level is deliberately absent. Mid-task context already lives in
   the transcript; a second copy only added staleness, and it shared a key with
   the session-switch race. Only user and project levels exist.
@@ -173,25 +170,20 @@ model dependent.
 
 Moving a project folder, or opening one folder through a path spelling that
 normalization cannot collapse (a symlink, a different drive mapping), produces a
-new owner and does not migrate records automatically. Old entries stay in the
-private file under their previous owner; a future identity migration must
-preserve them explicitly. Project records persist until superseded or the plugin
-is uninstalled; there is no TTL or automatic deletion hook.
+new owner. Project records persist until superseded or the plugin is uninstalled;
+there is no TTL or automatic deletion hook.
 
-### Version migration
+### Schema versioning
 
-Each version is a step, applied in order, so any older file reaches the current
-shape:
+The document carries `schemaVersion: 3`. This build reads and writes exactly
+that shape and nothing else: a document from any other version is refused with
+`MEMORY_STORAGE_INVALID` and left byte-identical on disk.
 
-| On disk | Becomes | What changes |
-|---|---|---|
-| 1 | 2 | Session entries and `sessionEnabled` are dropped; `title`, `validUntil`, `supersededBy` are added |
-| 2 | 3 | `proposals` starts empty |
-
-A 0.7.0 file is therefore reshaped to v2 and then to v3 in one load. The upgrade
-happens in memory; the file is rewritten only when the next mutation succeeds, so
-reading never destroys the original. An unknown or corrupt version still fails
-closed with a visible error.
+That refusal is the whole contract, and it is deliberate. Silently reshaping a
+document whose fields are not known is how records disappear; a visible error
+keeps the data recoverable by an older build. The feature is still in
+development, so there is no upgrade path to maintain and no half-migrated file
+to reason about.
 
 ## Acceptance and verification
 
@@ -229,9 +221,9 @@ Representative scenarios:
 6. Save concurrently, edit with a stale revision, supply guessed foreign IDs,
    switch context during an await, cancel queued/in-flight work, or unload.
    No operation lands in another scope or corrupts later queue operations.
-7. Restart the plugin and recall durable records. A 0.7.0 file loses only its
-   session rows; corrupt/future-version files are preserved on error; a failed
-   rename retains old disk/cache state.
+7. Restart the plugin and recall durable records. A document from another schema
+   version is refused with its bytes intact; corrupt files are preserved on error;
+   a failed rename retains old disk/cache state.
 8. In the renderer, add/edit/search/delete with confirmation; verify empty
    states, independent switches, save errors, context clearing, unavailable
    levels, late response rejection, missing grant guidance, EN/zh-CN locale

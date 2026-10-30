@@ -157,8 +157,7 @@ prefix is stripped, and trailing slashes go except after a drive letter. So
 `F:\PI-Desktop`, `F:/PI-Desktop/` and `//?/F:/PI-Desktop` are one project with
 one set of memories. Project groups are deliberately not used as the key: the
 sidebar treats each folder as its own project, and two folders of one group keep
-separate memories. Records written by 0.9.0 under a group id stay visible for
-their own folder until the next write folds them onto the path key.
+separate memories.
 
 Use **Use memory** to allow the AI to use memories, then select the available
 levels. **AI recall** and **AI write** have independent switches. Level switches
@@ -227,10 +226,9 @@ stale save rather than moving it to the newly selected scope. Tool access is
 limited to the invoking session while it remains selected; background sessions
 must become selected before using memory tools.
 
-Files written by 0.7.0 carried a session level. Loading one drops its session
-entries and its `sessionEnabled` switch, and keeps the user and project rows; the
-file is only rewritten when the next mutation happens, so a read never destroys
-the original.
+The storage document is versioned. A file from another schema version is refused
+with its bytes intact rather than reinterpreted, because guessing at an unknown
+shape is how records get lost.
 
 For implementation analysis, sources, contracts, and acceptance scenarios, see
 [the memory design](docs/memory-design.md).

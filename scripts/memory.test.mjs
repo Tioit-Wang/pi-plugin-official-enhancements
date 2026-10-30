@@ -543,32 +543,6 @@ test("user-level writes from the assistant are proposals the user must confirm",
   assert.equal(saved.entries[0].source, "manual");
 });
 
-test("a version 1 file loses its session entries and keeps user and project ones", async (t) => {
-  const f = await fixture(t);
-  const now = new Date().toISOString();
-  const legacy = {
-    schemaVersion: 1,
-    settings: {
-      enabled: true, userEnabled: true, projectEnabled: true,
-      sessionEnabled: true, aiReadEnabled: true, aiWriteEnabled: true,
-    },
-    entries: [
-      { id: "11111111-1111-1111-1111-111111111111", scope: "user", owner: "local-user", content: "Use concise explanations.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
-      { id: "22222222-2222-2222-2222-222222222222", scope: "project", owner: "path:/projects/one", content: "This project uses pnpm.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
-      { id: "33333333-3333-3333-3333-333333333333", scope: "session", owner: "s-one", content: "Debugging login.", revision: 1, source: "manual", createdAt: now, updatedAt: now },
-    ],
-  };
-  await writeFile(join(f.directory, "memory.v1.json"), JSON.stringify(legacy));
-
-  const state = await f.service.state();
-  assert.deepEqual(state.entries.map((entry) => entry.content).sort(), ["This project uses pnpm.", "Use concise explanations."]);
-  assert.equal(state.settings.sessionEnabled, undefined);
-  assert.equal(state.entries.every((entry) => entry.validUntil === null), true);
-
-  // Reading a legacy file must not rewrite it until an actual mutation happens.
-  const onDisk = JSON.parse(await readFile(join(f.directory, "memory.v1.json"), "utf8"));
-  assert.equal(onDisk.schemaVersion, 1);
-});
 
 test("an assistant user-level save leaves a proposal the user can confirm", async (t) => {
   const f = await fixture(t);
@@ -646,21 +620,26 @@ test("one folder is one project however the host spells its path", async (t) => 
   assert.equal((await f.service.state()).context.projectKey, "path:F:/PI-Desktop");
 });
 
-test("a record keyed by an old group id stays visible for its own folder", async (t) => {
-  const f = await fixture(t);
-  f.select("s-one", "/work/repo", "group-1");
-  f.setWorkspace({ path: "/work/repo", projectId: "group-1" });
-  await f.add("project", "Kept across the key change");
 
-  // Rewrite the owner the way 0.9.0 stored it, then read it back through the
-  // path key. The legacy owner is accepted only while this folder is visible.
-  const file = join(f.directory, "memory.v1.json");
-  const doc = JSON.parse(await readFile(file, "utf8"));
-  for (const entry of doc.entries) if (entry.scope === "project") entry.owner = "project:group-1";
-  await writeFile(file, JSON.stringify(doc));
-  await f.restart();
-  await f.service.updateSettings({ enabled: true });
-  f.select("s-one", "/work/repo", "group-1");
-  f.setWorkspace({ path: "/work/repo", projectId: "group-1" });
-  assert.deepEqual(contents(await f.recall({ scope: "project" })), ["Kept across the key change"]);
+test("a document from an older schema is refused rather than reinterpreted", async (t) => {
+  const f = await fixture(t);
+  const legacy = JSON.stringify({ schemaVersion: 2, settings: {}, entries: [] });
+  await writeFile(join(f.directory, "memory.v1.json"), legacy);
+  await rejectsCode(f.service.state(), "MEMORY_STORAGE_INVALID");
+
+  // The refusal must not touch the file, so a downgrade cannot destroy data.
+  assert.equal(await readFile(join(f.directory, "memory.v1.json"), "utf8"), legacy);
+});
+
+test("a document from another schema version is refused, not reinterpreted", async (t) => {
+  const f = await fixture(t);
+  // The build reads exactly one schema. An older or newer document fails closed
+  // with its bytes intact, so a version mismatch can never destroy records.
+  for (const version of [1, 2, 4]) {
+    const foreign = JSON.stringify({ schemaVersion: version, settings: {}, entries: [] });
+    await writeFile(join(f.directory, "memory.v1.json"), foreign);
+    await f.restart();
+    await rejectsCode(f.service.state(), "MEMORY_STORAGE_INVALID");
+    assert.equal(await readFile(join(f.directory, "memory.v1.json"), "utf8"), foreign);
+  }
 });

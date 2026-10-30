@@ -5,43 +5,9 @@ const { join } = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { DEFAULTS, LIMITS, fail, validateDocument } = require("./model.js");
 
-/**
- * Version 1 shipped a session level; version 2 dropped it; version 3 added
- * pending user-level proposals. Each step only reshapes what the previous one
- * wrote, so an old file reaches the current shape without losing the entries
- * that still have a home. The steps are applied in order rather than as a
- * switch, because a v1 file must pass through v2 to gain the temporal fields.
- */
-function migrateFrom1(raw) {
-  if (!raw || raw.schemaVersion !== 1 || !Array.isArray(raw.entries)) {
-    fail("STORAGE_INVALID", "Memory storage is invalid or uses an unsupported version. It was not overwritten.");
-  }
-  const { sessionEnabled, ...settings } = raw.settings ?? {};
-  const entries = raw.entries
-    .filter((entry) => entry.scope === "user" || entry.scope === "project")
-    .map((entry) => ({
-      ...entry,
-      title: typeof entry.title === "string" ? entry.title : "",
-      validUntil: null,
-      supersededBy: null,
-    }));
-  return { schemaVersion: 2, settings, entries };
-}
-
-/** Version 2 files predate proposals, so they simply start with none. */
-function migrateFrom2(raw) {
-  if (!raw || !Array.isArray(raw.entries)) {
-    fail("STORAGE_INVALID", "Memory storage is invalid or uses an unsupported version. It was not overwritten.");
-  }
-  return { schemaVersion: 3, settings: { ...DEFAULTS, ...raw.settings }, entries: raw.entries, proposals: [] };
-}
-
-/** Bring any older on-disk version to the current one, one step at a time. */
-function upgrade(raw) {
-  let next = raw;
-  if (next && next.schemaVersion === 1) next = migrateFrom1(next);
-  if (next && next.schemaVersion === 2) next = migrateFrom2(next);
-  return next;
+/** The one document shape this build reads and writes. */
+function emptyDocument() {
+  return { schemaVersion: 3, settings: { ...DEFAULTS }, entries: [], proposals: [] };
 }
 
 // The service serializes operations. Only rename publishes a new snapshot.
@@ -67,12 +33,12 @@ function createStore(getDataPath) {
         const bytes = Buffer.alloc(Math.min(stat.size + 1, LIMITS.fileBytes + 1));
         const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
         if (bytesRead !== stat.size) fail("STORAGE_INVALID", "Memory storage changed while being read. Retry after reloading the plugin.");
-        cached = validateDocument(upgrade(JSON.parse(bytes.subarray(0, bytesRead).toString("utf8"))));
+        cached = validateDocument(JSON.parse(bytes.subarray(0, bytesRead).toString("utf8")));
       } finally {
         await handle.close();
       }
     } catch (error) {
-      if (error.code === "ENOENT") cached = { schemaVersion: 3, settings: { ...DEFAULTS }, entries: [], proposals: [] };
+      if (error.code === "ENOENT") cached = emptyDocument();
       else if (error instanceof SyntaxError) fail("STORAGE_INVALID", "Memory storage contains invalid JSON. It was not overwritten.");
       else if (error.code?.startsWith("MEMORY_")) throw error;
       else fail("STORAGE_IO", "Memory storage could not be read. Check the plugin data directory permissions.");

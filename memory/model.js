@@ -100,13 +100,9 @@ function scopeOwner(scope, context) {
 }
 
 function visibleEntries(entries, context) {
-  // A project owner match accepts the current folder key plus any legacy group
-  // key that still resolves to this folder, so 0.9.0 records stay visible until
-  // the next write folds them onto the path key.
-  const owners = new Set([context.projectKey, ...(context.legacyProjectIds ?? [])].filter(Boolean));
   return entries.filter((entry) => entry.scope === "user"
     ? entry.owner === "local-user"
-    : owners.size > 0 && owners.has(entry.owner));
+    : Boolean(context.projectKey) && entry.owner === context.projectKey);
 }
 
 function publicEntry(entry) {

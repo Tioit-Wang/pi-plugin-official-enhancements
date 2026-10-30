@@ -47,7 +47,7 @@ function createMemoryService(api) {
     if (toolContext && active?.sessionId !== toolContext.sessionId) {
       fail("SESSION_CHANGED", "The invoking session is no longer selected. Retry in that session.");
     }
-    if (!active) return { sessionId: null, projectKey: null, projectLabel: null, legacyProjectIds: [] };
+    if (!active) return { sessionId: null, projectKey: null, projectLabel: null };
     const path = typeof active.projectPath === "string" && active.projectPath ? active.projectPath : null;
     // The owner key is the sidebar's grouping key, so the panel groups projects
     // exactly as the sidebar does. A label is cosmetic and never a key.
@@ -62,17 +62,10 @@ function createMemoryService(api) {
     const label = sameFolder && workspace.name
       ? workspace.name
       : (path ? path.replace(/\\/g, "/").split("/").filter(Boolean).at(-1) ?? path : null);
-    // Earlier releases keyed a project by its group id. Those owners cannot be
-    // resolved from a path, so a group id is only usable while this folder is
-    // the visible one; it is retired on the next write rather than left to rot.
-    const legacyProjectIds = sameFolder && typeof workspace.projectId === "string" && workspace.projectId
-      ? [`project:${workspace.projectId}`]
-      : [];
     return {
       sessionId: active.sessionId,
       projectKey,
       projectLabel: projectKey ? label : null,
-      legacyProjectIds,
     };
   }
 
