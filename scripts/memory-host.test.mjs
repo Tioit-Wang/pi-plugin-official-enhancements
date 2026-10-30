@@ -58,10 +58,17 @@ test("panel management and the declared agent tool share durable memory through 
   state = await plugin.onPanelInvoke("memory.settings", { partial: { enabled: true, aiWriteEnabled: true } });
   assert.equal(state.toolAvailable, true);
   assert.equal((await execute({ action: "recall", query: "pnpm" }, ctx)).memories[0].content, "Use pnpm.");
-  await execute({ action: "save", scope: "user", content: "Prefer short answers." }, ctx);
+  // An assistant write at user level is a proposal, never a mutation.
+  const proposal = await execute({ action: "save", scope: "user", content: "Prefer short answers." }, ctx);
+  assert.equal(proposal.proposed, true);
+  assert.equal(proposal.proposal.content, "Prefer short answers.");
   state = await plugin.onPanelInvoke("memory.state");
+  assert.equal(state.entries.some((entry) => entry.scope === "user"), false);
+
+  // The panel writes user memory directly, because the user is the author.
+  state = await plugin.onPanelInvoke("memory.save", { context: state.context, scope: "user", content: "Prefer short answers." });
   const added = state.entries.find((entry) => entry.scope === "user");
-  assert.equal(added.source, "ai");
+  assert.equal(added.source, "manual");
   state = await plugin.onPanelInvoke("memory.save", { context: state.context, scope: "user", id: added.id, expectedRevision: added.revision, content: "Explain concisely." });
   assert.equal(state.entries.find((entry) => entry.id === added.id).revision, 2);
   const stale = await plugin.onPanelInvoke("memory.delete", { context: state.context, scope: "user", id: added.id, expectedRevision: 1 });
@@ -84,8 +91,10 @@ test("panel management and the declared agent tool share durable memory through 
   assert.equal(storedSettings.predictionsEnabled, false);
   assert.equal(storedSettings.enabled, undefined, "Memory does not pollute existing enhancement settings");
   const disk = JSON.parse(await readFile(join(directory, "memory.v1.json"), "utf8"));
-  assert.equal(disk.entries.length, 1);
-  assert.equal(disk.entries[0].owner, "project:project-1");
+  // A deleted entry stays on disk as superseded history rather than vanishing.
+  assert.equal(disk.entries.length, 2);
+  assert.equal(disk.entries.filter((entry) => entry.validUntil === null).length, 1);
+  assert.equal(disk.entries.find((entry) => entry.scope === "project").owner, "project:project-1");
 
   await plugin.onUnload();
   globalThis.pi.agent.registerTool = async () => { throw Object.assign(new Error("Tool permission not granted"), { code: "PERMISSION_DENIED" }); };

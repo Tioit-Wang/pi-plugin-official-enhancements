@@ -5,6 +5,33 @@ const { join } = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { DEFAULTS, LIMITS, fail, validateDocument } = require("./model.js");
 
+/**
+ * Version 1 shipped a session level. Version 2 keeps only user and project, so
+ * a v1 document drops its session entries and its `sessionEnabled` switch. The
+ * entries that survive are re-shaped with the temporal fields v2 requires.
+ */
+function migrateFrom1(raw) {
+  if (!raw || raw.schemaVersion !== 1 || !Array.isArray(raw.entries)) {
+    fail("STORAGE_INVALID", "Memory storage is invalid or uses an unsupported version. It was not overwritten.");
+  }
+  const { sessionEnabled, ...settings } = raw.settings ?? {};
+  const entries = raw.entries
+    .filter((entry) => entry.scope === "user" || entry.scope === "project")
+    .map((entry) => ({
+      ...entry,
+      title: typeof entry.title === "string" ? entry.title : "",
+      validUntil: null,
+      supersededBy: null,
+    }));
+  return { schemaVersion: 2, settings: { ...DEFAULTS, ...settings }, entries };
+}
+
+/** Accept either on-disk version; the caller sees the current shape only. */
+function upgrade(raw) {
+  if (raw && raw.schemaVersion === 2) return raw;
+  return migrateFrom1(raw);
+}
+
 // The service serializes operations. Only rename publishes a new snapshot.
 function createStore(getDataPath) {
   let cached = null;
@@ -28,12 +55,12 @@ function createStore(getDataPath) {
         const bytes = Buffer.alloc(Math.min(stat.size + 1, LIMITS.fileBytes + 1));
         const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
         if (bytesRead !== stat.size) fail("STORAGE_INVALID", "Memory storage changed while being read. Retry after reloading the plugin.");
-        cached = validateDocument(JSON.parse(bytes.subarray(0, bytesRead).toString("utf8")));
+        cached = validateDocument(upgrade(JSON.parse(bytes.subarray(0, bytesRead).toString("utf8"))));
       } finally {
         await handle.close();
       }
     } catch (error) {
-      if (error.code === "ENOENT") cached = { schemaVersion: 1, settings: { ...DEFAULTS }, entries: [] };
+      if (error.code === "ENOENT") cached = { schemaVersion: 2, settings: { ...DEFAULTS }, entries: [] };
       else if (error instanceof SyntaxError) fail("STORAGE_INVALID", "Memory storage contains invalid JSON. It was not overwritten.");
       else if (error.code?.startsWith("MEMORY_")) throw error;
       else fail("STORAGE_IO", "Memory storage could not be read. Check the plugin data directory permissions.");

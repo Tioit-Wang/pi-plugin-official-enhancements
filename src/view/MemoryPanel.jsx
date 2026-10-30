@@ -2,8 +2,8 @@ import React from "react";
 import { memoryCopy } from "./memory-copy.js";
 
 const { useCallback, useEffect, useRef, useState } = React;
-const SCOPES = ["user", "project", "session"];
-const EMPTY_DRAFT = { id: null, content: "", revision: null };
+const SCOPES = ["user", "project"];
+const EMPTY_DRAFT = { id: null, title: "", content: "", revision: null };
 
 function contextKey(context) {
   return JSON.stringify([context?.sessionId ?? null, context?.projectKey ?? null]);
@@ -124,8 +124,8 @@ export function MemoryPanel({ bridge, disabled = false }) {
 
   const busy = disabled || loading || saving;
   const settings = snapshot?.settings;
-  const available = { user: true, project: Boolean(snapshot?.context?.projectKey), session: Boolean(snapshot?.context?.sessionId) };
-  const maxChars = snapshot?.limits?.contentChars ?? 2000;
+  const available = { user: true, project: Boolean(snapshot?.context?.projectKey) };
+  const maxChars = snapshot?.limits?.[scope]?.contentChars ?? 2000;
   const valid = draft.content.trim().length > 0 && draft.content.length <= maxChars;
   const scoped = (snapshot?.entries ?? []).filter((entry) => entry.scope === scope);
   const filtered = scoped.filter((entry) => entry.content.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
@@ -134,7 +134,7 @@ export function MemoryPanel({ bridge, disabled = false }) {
     event.preventDefault();
     if (!valid || !available[scope]) return;
     void mutate("memory.save", {
-      context: snapshot.context, scope, content: draft.content,
+      context: snapshot.context, scope, title: draft.title, content: draft.content,
       ...(draft.id ? { id: draft.id, expectedRevision: draft.revision } : {}),
     }, copy.saved, true);
   };
@@ -164,12 +164,16 @@ export function MemoryPanel({ bridge, disabled = false }) {
         <div className="memory-heading"><h3>{copy.manage}</h3><span className="memory-hint">{copy.count(scoped.length)}</span></div>
         <label className="memory-field"><span>{copy.scope}</span>
           <select value={scope} disabled={busy} onChange={(event) => { setScope(event.target.value); setDraft(EMPTY_DRAFT); setDeleting(null); setQuery(""); }}>
-            {SCOPES.map((level) => <option key={level} value={level} disabled={!available[level]}>{copy[level]}{available[level] ? "" : ` · ${copy[level === "project" ? "noProject" : "noSession"]}`}</option>)}
+            {SCOPES.map((level) => <option key={level} value={level} disabled={!available[level]}>{copy[level]}{available[level] ? "" : ` · ${copy.noProject}`}</option>)}
           </select>
         </label>
         {scope === "project" && <p className="memory-context">{copy.currentProject}: {snapshot.context.projectLabel || snapshot.context.projectKey}</p>}
-        {scope === "session" && <p className="memory-context">{copy.currentSession}: {snapshot.context.sessionId}</p>}
         <form onSubmit={saveDraft}>
+          <label className="memory-field"><span>{copy.titleLabel}</span>
+            <input type="text" value={draft.title} maxLength={200} disabled={busy || !available[scope]}
+              onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
+          </label>
+          <p className="memory-hint">{copy.titleHint}</p>
           <label className="memory-field"><span>{copy.content}</span>
             <textarea ref={editor} rows={3} value={draft.content} maxLength={maxChars} disabled={busy || !available[scope]} aria-describedby="memory-limit"
               onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} />
@@ -184,10 +188,11 @@ export function MemoryPanel({ bridge, disabled = false }) {
         {filtered.length === 0 && <p className="memory-hint">{scoped.length ? copy.noResults : copy.empty}</p>}
         <ul className="memory-list">
           {filtered.map((entry) => <li key={entry.id} className="memory-entry">
+            {entry.title && <p className="memory-title">{entry.title}</p>}
             <p className="memory-content">{entry.content}</p>
             <div className="memory-actions">
               <span className="memory-hint">{entry.source === "ai" ? copy.ai : copy.manual} · {copy.revision(entry.revision)}</span>
-              <button type="button" disabled={busy} onClick={() => { setDraft({ id: entry.id, content: entry.content, revision: entry.revision }); setDeleting(null); editor.current?.focus(); }}>{copy.edit}</button>
+              <button type="button" disabled={busy} onClick={() => { setDraft({ id: entry.id, title: entry.title ?? "", content: entry.content, revision: entry.revision }); setDeleting(null); editor.current?.focus(); }}>{copy.edit}</button>
               <button type="button" disabled={busy} onClick={() => setDeleting(entry.id)}>{copy.remove}</button>
             </div>
             {deleting === entry.id && <div className="memory-delete" role="group" aria-label={copy.confirmDelete}>

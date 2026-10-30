@@ -21,7 +21,7 @@ const assert = (condition, message) => { if (!condition) throw new Error(message
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const state = {
   ok: true,
-  settings: { enabled: false, userEnabled: true, projectEnabled: true, sessionEnabled: true, aiReadEnabled: true, aiWriteEnabled: false },
+  settings: { enabled: false, userEnabled: true, projectEnabled: true, aiReadEnabled: true, aiWriteEnabled: false },
   context: { sessionId: "s1", projectKey: "p1", projectLabel: "Project One" },
   entries: [], limits: { contentChars: 2000 },
 };
@@ -55,13 +55,19 @@ const container = document.getElementById("root");
 let app = createRoot(container);
 const buttons = () => [...container.querySelectorAll("button")];
 const button = (label) => buttons().find((node) => node.textContent === label);
-const input = (label) => [...container.querySelectorAll("label")].find((node) => node.querySelector("span")?.textContent === label)?.querySelector("input,select,textarea");
+const input = (label) => [...container.querySelectorAll("label")]
+  .filter((node) => node.querySelector(":scope > span")?.textContent === label)
+  .map((node) => node.querySelector("input,select,textarea"))
+  .find(Boolean);
 const click = async (label) => {
   const node = button(label); assert(node && !node.disabled, "Enabled button missing: " + label);
   await act(async () => node.click());
 };
 const setValue = async (node, value) => {
-  assert(node && !node.disabled, "Input is available");
+  assert(node && !node.disabled, "Input is available: " + JSON.stringify({
+    found: Boolean(node), tag: node?.tagName ?? null, disabled: node?.disabled ?? null,
+    labels: [...container.querySelectorAll("label")].map((l) => l.querySelector(":scope > span")?.textContent ?? "?"),
+  }));
   const prototype = node.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : node.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
   Object.getOwnPropertyDescriptor(prototype, "value").set.call(node, value);
   await act(async () => node.dispatchEvent(new Event(node.tagName === "SELECT" ? "change" : "input", { bubbles: true })));
@@ -69,11 +75,13 @@ const setValue = async (node, value) => {
 const text = () => container.textContent;
 const run = async () => {
   await act(async () => app.render(<MemoryPanel bridge={bridge} />));
-  assert(text().includes("用户级别") && text().includes("项目级别") && text().includes("会话级别"), "Three localized levels render");
-  assert(container.querySelectorAll('[role="switch"]').length === 6, "All six independent switches render");
+  assert(text().includes("用户级别") && text().includes("项目级别"), "Two localized levels render");
+  assert(!text().includes("会话级别"), "The session level is gone");
+  assert(container.querySelectorAll('[role="switch"]').length === 5, "All five independent switches render");
   assert(text().includes("AI 记忆功能已关闭"), "Off state is explicit");
   assert(button("添加记忆").disabled, "Empty memory cannot be submitted");
 
+  await setValue(input("级别"), "project");
   await setValue(input("记忆内容"), "Prefer concise answers <img src=x onerror=alert(1)>");
   await click("添加记忆");
   assert(text().includes("Prefer concise answers"), "Manual save works while AI memory is off");
@@ -112,7 +120,7 @@ const run = async () => {
   await act(async () => container.querySelector('[aria-label="启用记忆"]').click());
   await act(async () => container.querySelector('[aria-label="AI 写入"]').click());
   await act(async () => container.querySelector('[aria-label="项目级别"]').click());
-  assert(state.settings.enabled && state.settings.aiWriteEnabled && !state.settings.projectEnabled && state.settings.sessionEnabled, "Switches persist independently");
+  assert(state.settings.enabled && state.settings.aiWriteEnabled && !state.settings.projectEnabled, "Switches persist independently");
   nextReply = async () => ({ ok: false, message: "Settings could not be saved." });
   await act(async () => container.querySelector('[aria-label="AI 写入"]').click());
   assert(container.querySelector('[aria-label="AI 写入"]').checked, "Failed settings write keeps the persisted switch value");
@@ -135,7 +143,8 @@ const run = async () => {
   await act(async () => window.dispatchEvent(new Event("focus")));
   await act(async () => resolveOld(old));
   assert(!text().includes("STALE RESPONSE"), "Late reads cannot replace newer state");
-  assert(input("级别").querySelector('option[value="project"]').disabled && input("级别").querySelector('option[value="session"]').disabled, "Unavailable scopes cannot be selected");
+  assert(input("级别").querySelector('option[value="project"]').disabled, "An unavailable level cannot be selected");
+  assert(!input("级别").querySelector('option[value="session"]'), "No session level is offered");
 
   state.toolAvailable = false;
   await click("刷新");
