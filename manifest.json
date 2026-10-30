@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "id": "pi.official-enhancements",
   "name": "Official Enhancements",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Composer suggestions, prompt enhancement, session titles, and optional local memory at user and project levels, with manual management, independently controlled AI recall and writes, and supersession history instead of destructive edits.",
   "author": "PI-Desktop",
   "main": "main.js",
   "ui": {
     "panel": "views/index.html",
     "title": { "en": "Enhancements", "zh-CN": "增强设置" },
-    "width": 520,
-    "height": 640
+    "width": 960,
+    "height": 720
   },
   "contributes": {
     "agentTools": [

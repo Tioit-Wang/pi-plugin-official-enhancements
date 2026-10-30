@@ -564,3 +564,60 @@ test("a version 1 file loses its session entries and keeps user and project ones
   const onDisk = JSON.parse(await readFile(join(f.directory, "memory.v1.json"), "utf8"));
   assert.equal(onDisk.schemaVersion, 1);
 });
+
+test("an assistant user-level save leaves a proposal the user can confirm", async (t) => {
+  const f = await fixture(t);
+  await f.service.updateSettings({ enabled: true, aiWriteEnabled: true });
+  const proposed = await f.service.execute({ action: "save", scope: "user", title: "称呼", content: "叫我王哥" }, f.toolContext);
+  assert.equal(proposed.proposed, true);
+  assert.equal(proposed.proposal.content, "叫我王哥");
+
+  // The proposal is durable: it survives a reload instead of vanishing with the tool result.
+  const persisted = JSON.parse(await readFile(join(f.directory, "memory.v1.json"), "utf8"));
+  assert.equal(persisted.proposals.length, 1);
+  assert.equal((await f.service.state()).entries.length, 0);
+
+  // Nothing is injected until the user accepts it.
+  assert.deepEqual(contents(await f.recall()), []);
+
+  const pendingId = (await f.service.state()).proposals[0].id;
+  const after = await f.service.acceptProposal({ id: pendingId });
+  assert.equal(after.entries.length, 1);
+  assert.equal(after.entries[0].content, "叫我王哥");
+  assert.equal(after.entries[0].source, "manual");
+  assert.deepEqual(after.proposals, []);
+  assert.deepEqual(contents(await f.recall()), ["叫我王哥"]);
+});
+
+test("a dismissed proposal is dropped without touching stored entries", async (t) => {
+  const f = await fixture(t);
+  await f.service.updateSettings({ enabled: true, aiWriteEnabled: true });
+  await f.service.execute({ action: "save", scope: "user", content: "叫我王哥" }, f.toolContext);
+  const id = (await f.service.state()).proposals[0].id;
+  const after = await f.service.rejectProposal({ id });
+  assert.deepEqual(after.proposals, []);
+  assert.equal(after.entries.length, 0);
+  await assert.rejects(f.service.rejectProposal({ id }), { code: "MEMORY_NOT_FOUND" });
+});
+
+test("the same pending proposal is not queued twice", async (t) => {
+  const f = await fixture(t);
+  await f.service.updateSettings({ enabled: true, aiWriteEnabled: true });
+  await f.service.execute({ action: "save", scope: "user", content: "叫我王哥" }, f.toolContext);
+  const again = await f.service.execute({ action: "save", scope: "user", content: "叫我王哥" }, f.toolContext);
+  assert.equal(again.proposed, true);
+  assert.equal((await f.service.state()).proposals.length, 1);
+});
+
+test("accepting a proposal supersedes an entry with the same label", async (t) => {
+  const f = await fixture(t);
+  const { context } = await f.service.state();
+  await f.service.save({ context, scope: "user", title: "称呼", content: "叫我小王" });
+  await f.service.updateSettings({ enabled: true, aiWriteEnabled: true });
+  await f.service.execute({ action: "save", scope: "user", title: "称呼", content: "叫我王哥" }, f.toolContext);
+  const id = (await f.service.state()).proposals[0].id;
+  const after = await f.service.acceptProposal({ id });
+  const active = after.entries.filter((entry) => entry.validUntil === null);
+  assert.equal(active.length, 1);
+  assert.equal(active[0].content, "叫我王哥");
+});

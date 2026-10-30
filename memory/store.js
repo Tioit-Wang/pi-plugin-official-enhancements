@@ -6,9 +6,11 @@ const { randomUUID } = require("node:crypto");
 const { DEFAULTS, LIMITS, fail, validateDocument } = require("./model.js");
 
 /**
- * Version 1 shipped a session level. Version 2 keeps only user and project, so
- * a v1 document drops its session entries and its `sessionEnabled` switch. The
- * entries that survive are re-shaped with the temporal fields v2 requires.
+ * Version 1 shipped a session level; version 2 dropped it; version 3 added
+ * pending user-level proposals. Each step only reshapes what the previous one
+ * wrote, so an old file reaches the current shape without losing the entries
+ * that still have a home. The steps are applied in order rather than as a
+ * switch, because a v1 file must pass through v2 to gain the temporal fields.
  */
 function migrateFrom1(raw) {
   if (!raw || raw.schemaVersion !== 1 || !Array.isArray(raw.entries)) {
@@ -23,13 +25,23 @@ function migrateFrom1(raw) {
       validUntil: null,
       supersededBy: null,
     }));
-  return { schemaVersion: 2, settings: { ...DEFAULTS, ...settings }, entries };
+  return { schemaVersion: 2, settings, entries };
 }
 
-/** Accept either on-disk version; the caller sees the current shape only. */
+/** Version 2 files predate proposals, so they simply start with none. */
+function migrateFrom2(raw) {
+  if (!raw || !Array.isArray(raw.entries)) {
+    fail("STORAGE_INVALID", "Memory storage is invalid or uses an unsupported version. It was not overwritten.");
+  }
+  return { schemaVersion: 3, settings: { ...DEFAULTS, ...raw.settings }, entries: raw.entries, proposals: [] };
+}
+
+/** Bring any older on-disk version to the current one, one step at a time. */
 function upgrade(raw) {
-  if (raw && raw.schemaVersion === 2) return raw;
-  return migrateFrom1(raw);
+  let next = raw;
+  if (next && next.schemaVersion === 1) next = migrateFrom1(next);
+  if (next && next.schemaVersion === 2) next = migrateFrom2(next);
+  return next;
 }
 
 // The service serializes operations. Only rename publishes a new snapshot.
@@ -60,7 +72,7 @@ function createStore(getDataPath) {
         await handle.close();
       }
     } catch (error) {
-      if (error.code === "ENOENT") cached = { schemaVersion: 2, settings: { ...DEFAULTS }, entries: [] };
+      if (error.code === "ENOENT") cached = { schemaVersion: 3, settings: { ...DEFAULTS }, entries: [], proposals: [] };
       else if (error instanceof SyntaxError) fail("STORAGE_INVALID", "Memory storage contains invalid JSON. It was not overwritten.");
       else if (error.code?.startsWith("MEMORY_")) throw error;
       else fail("STORAGE_IO", "Memory storage could not be read. Check the plugin data directory permissions.");

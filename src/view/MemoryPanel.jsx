@@ -18,7 +18,11 @@ function Toggle({ label, hint, checked, disabled, onChange }) {
   );
 }
 
-/** A separate settings surface for memory; it never reads conversation content. */
+/**
+ * A settings surface for memory. The list and the editor sit side by side so a
+ * long list never pushes the editor out of view, which the previous single
+ * column did as soon as more than a few entries existed.
+ */
 export function MemoryPanel({ bridge, disabled = false }) {
   const [snapshot, setSnapshot] = useState(null);
   const [locale, setLocale] = useState("en");
@@ -129,6 +133,7 @@ export function MemoryPanel({ bridge, disabled = false }) {
   const valid = draft.content.trim().length > 0 && draft.content.length <= maxChars;
   const scoped = (snapshot?.entries ?? []).filter((entry) => entry.scope === scope);
   const filtered = scoped.filter((entry) => entry.content.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const proposals = snapshot?.proposals ?? [];
   const setOption = (key) => void mutate("memory.settings", { partial: { [key]: !settings[key] } }, copy.settingsSaved);
   const saveDraft = (event) => {
     event.preventDefault();
@@ -137,6 +142,11 @@ export function MemoryPanel({ bridge, disabled = false }) {
       context: snapshot.context, scope, title: draft.title, content: draft.content,
       ...(draft.id ? { id: draft.id, expectedRevision: draft.revision } : {}),
     }, copy.saved, true);
+  };
+  const startEdit = (entry) => {
+    setDraft({ id: entry.id, title: entry.title ?? "", content: entry.content, revision: entry.revision });
+    setDeleting(null);
+    editor.current?.focus();
   };
 
   return (
@@ -161,6 +171,29 @@ export function MemoryPanel({ bridge, disabled = false }) {
           <Toggle label={copy.aiWriteEnabled} hint={copy.aiWriteHint} checked={settings.aiWriteEnabled} disabled={busy || snapshot.toolAvailable === false} onChange={() => setOption("aiWriteEnabled")} />
         </div>
         <p className="memory-hint">{copy.privacy}</p>
+
+        <section className="memory-proposals" aria-labelledby="memory-proposals-heading">
+          <div className="memory-heading">
+            <h3 id="memory-proposals-heading">{copy.proposals}</h3>
+            <span className="memory-hint">{proposals.length}</span>
+          </div>
+          <p className="memory-hint">{copy.proposalHint}</p>
+          {proposals.length === 0
+            ? <p className="memory-hint">{copy.proposalNone}</p>
+            : <ul className="memory-list">
+              {proposals.map((proposal) => <li key={proposal.id} className="memory-entry memory-proposal">
+                {proposal.title && <p className="memory-title">{proposal.title}</p>}
+                <p className="memory-content">{proposal.content}</p>
+                <div className="memory-actions">
+                  <button className="memory-primary" type="button" disabled={busy}
+                    onClick={() => void mutate("memory.acceptProposal", { id: proposal.id }, copy.proposalAccepted)}>{copy.proposalAccept}</button>
+                  <button type="button" disabled={busy}
+                    onClick={() => void mutate("memory.rejectProposal", { id: proposal.id }, copy.proposalRejected)}>{copy.proposalReject}</button>
+                </div>
+              </li>)}
+            </ul>}
+        </section>
+
         <div className="memory-heading"><h3>{copy.manage}</h3><span className="memory-hint">{copy.count(scoped.length)}</span></div>
         <label className="memory-field"><span>{copy.scope}</span>
           <select value={scope} disabled={busy} onChange={(event) => { setScope(event.target.value); setDraft(EMPTY_DRAFT); setDeleting(null); setQuery(""); }}>
@@ -168,42 +201,51 @@ export function MemoryPanel({ bridge, disabled = false }) {
           </select>
         </label>
         {scope === "project" && <p className="memory-context">{copy.currentProject}: {snapshot.context.projectLabel || snapshot.context.projectKey}</p>}
-        <form onSubmit={saveDraft}>
-          <label className="memory-field"><span>{copy.titleLabel}</span>
-            <input type="text" value={draft.title} maxLength={200} disabled={busy || !available[scope]}
-              onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
-          </label>
-          <p className="memory-hint">{copy.titleHint}</p>
-          <label className="memory-field"><span>{copy.content}</span>
-            <textarea ref={editor} rows={3} value={draft.content} maxLength={maxChars} disabled={busy || !available[scope]} aria-describedby="memory-limit"
-              onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} />
-          </label>
-          <div className="memory-actions">
-            <span id="memory-limit" className="memory-hint">{draft.content.length} / {maxChars}</span>
-            <button className="memory-primary" type="submit" disabled={busy || !valid || !available[scope]}>{saving ? copy.saving : draft.id ? copy.update : copy.add}</button>
-            {draft.id && <button type="button" disabled={busy} onClick={() => setDraft(EMPTY_DRAFT)}>{copy.cancel}</button>}
+
+        {/* Two panes: the entry list and the editor keep their own scroll, so a
+            long list cannot push the form out of reach. */}
+        <div className="memory-split">
+          <div className="memory-pane memory-pane-list">
+            <label className="memory-field"><span>{copy.search}</span><input type="search" value={query} disabled={busy} onChange={(event) => setQuery(event.target.value)} /></label>
+            {filtered.length === 0 && <p className="memory-hint">{scoped.length ? copy.noResults : copy.empty}</p>}
+            <ul className="memory-list">
+              {filtered.map((entry) => <li key={entry.id} className={`memory-entry${draft.id === entry.id ? " memory-entry-active" : ""}`}>
+                <button type="button" className="memory-entry-open" disabled={busy} onClick={() => startEdit(entry)}>
+                  {entry.title && <span className="memory-title">{entry.title}</span>}
+                  <span className="memory-content">{entry.content}</span>
+                </button>
+                <div className="memory-actions">
+                  <span className="memory-hint">{entry.source === "ai" ? copy.ai : copy.manual} · {copy.revision(entry.revision)}</span>
+                  <button type="button" disabled={busy} onClick={() => startEdit(entry)}>{copy.edit}</button>
+                  <button type="button" disabled={busy} onClick={() => setDeleting(entry.id)}>{copy.remove}</button>
+                </div>
+                {deleting === entry.id && <div className="memory-delete" role="group" aria-label={copy.confirmDelete}>
+                  <p>{copy.confirmDelete}</p>
+                  <div className="memory-actions">
+                    <button className="memory-danger" type="button" disabled={busy} onClick={() => void mutate("memory.delete", { context: snapshot.context, scope, id: entry.id, expectedRevision: entry.revision }, copy.deleted, true)}>{copy.confirm}</button>
+                    <button type="button" disabled={busy} onClick={() => setDeleting(null)}>{copy.cancel}</button>
+                  </div>
+                </div>}
+              </li>)}
+            </ul>
           </div>
-        </form>
-        <label className="memory-field"><span>{copy.search}</span><input type="search" value={query} disabled={busy} onChange={(event) => setQuery(event.target.value)} /></label>
-        {filtered.length === 0 && <p className="memory-hint">{scoped.length ? copy.noResults : copy.empty}</p>}
-        <ul className="memory-list">
-          {filtered.map((entry) => <li key={entry.id} className="memory-entry">
-            {entry.title && <p className="memory-title">{entry.title}</p>}
-            <p className="memory-content">{entry.content}</p>
+          <form className="memory-pane memory-pane-editor" onSubmit={saveDraft}>
+            <label className="memory-field"><span>{copy.titleLabel}</span>
+              <input type="text" value={draft.title} maxLength={200} disabled={busy || !available[scope]}
+                onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
+            </label>
+            <p className="memory-hint">{copy.titleHint}</p>
+            <label className="memory-field"><span>{copy.content}</span>
+              <textarea ref={editor} rows={6} value={draft.content} maxLength={maxChars} disabled={busy || !available[scope]} aria-describedby="memory-limit"
+                onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} />
+            </label>
             <div className="memory-actions">
-              <span className="memory-hint">{entry.source === "ai" ? copy.ai : copy.manual} · {copy.revision(entry.revision)}</span>
-              <button type="button" disabled={busy} onClick={() => { setDraft({ id: entry.id, title: entry.title ?? "", content: entry.content, revision: entry.revision }); setDeleting(null); editor.current?.focus(); }}>{copy.edit}</button>
-              <button type="button" disabled={busy} onClick={() => setDeleting(entry.id)}>{copy.remove}</button>
+              <span id="memory-limit" className="memory-hint">{draft.content.length} / {maxChars}</span>
+              <button className="memory-primary" type="submit" disabled={busy || !valid || !available[scope]}>{saving ? copy.saving : draft.id ? copy.update : copy.add}</button>
+              {draft.id && <button type="button" disabled={busy} onClick={() => setDraft(EMPTY_DRAFT)}>{copy.cancel}</button>}
             </div>
-            {deleting === entry.id && <div className="memory-delete" role="group" aria-label={copy.confirmDelete}>
-              <p>{copy.confirmDelete}</p>
-              <div className="memory-actions">
-                <button className="memory-danger" type="button" disabled={busy} onClick={() => void mutate("memory.delete", { context: snapshot.context, scope, id: entry.id, expectedRevision: entry.revision }, copy.deleted, true)}>{copy.confirm}</button>
-                <button type="button" disabled={busy} onClick={() => setDeleting(null)}>{copy.cancel}</button>
-              </div>
-            </div>}
-          </li>)}
-        </ul>
+          </form>
+        </div>
       </>}
     </section>
   );

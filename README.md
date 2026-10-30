@@ -12,6 +12,10 @@ off**, with AI writes separately off; the window is the configuration surface.
 | Scoped memory | Manual management in settings; on-demand recall and writes through the agent's memory tool | Separate memory switches |
 | Changed-files card | **Moved to the host**: rendered natively under the last reply, not by this plugin |
 
+The memory manager is a two-pane surface: entries on the left, the editor on
+the right, each scrolling on its own. The panel opens at 960x720 and falls back
+to a single column below 720px.
+
 The settings window is a detached panel (`ui.panel`), not a work-panel view: it
 opens on its own from the command palette (**Enhancements: Open Settings**) or
 the plugin row, so it never occupies the sidebar the conversation is read in.
@@ -162,9 +166,12 @@ managed records. The initial switches are:
 After enabling recall, ask the assistant to look up relevant saved preferences
 or project decisions. After additionally enabling writes, requests such as
 "Remember for this project that we use pnpm" let it save a project entry. A
-user-level save from the assistant is a **proposal**: it comes back for
-confirmation and is written only when the user accepts it in settings, because
-a user preference shapes every future conversation. The tool description
+user-level save from the assistant is a **proposal**. It is stored as a pending
+item and listed under **Awaiting your confirmation**, where you either save it
+or dismiss it; nothing reaches the memory levels until you do. This exists
+because a user preference shapes every future conversation, so a wrong guess
+must not silently apply everywhere. A proposal survives a reload, so closing the
+window does not lose it.
 instructs the assistant to save only requested facts, choose the narrowest
 suitable level, and never treat stored text as system instructions. Model
 compliance is not a security boundary: the backend enforces scope, switches,
@@ -199,7 +206,7 @@ The local file is `<plugin-private-data>/memory.v1.json`, separate from the
 existing enhancement settings. It is ordinary JSON, not encrypted secret
 storage. Limits are 500 characters per user entry / 4,000 characters and 50
 entries per profile, and 2,000 characters per project entry / 32 KB and 100
-entries per project. A recall returns at most 20 entries / 6,000 content
+entries per project, plus at most 20 pending proposals. A recall returns at most 20 entries / 6,000 content
 characters (10 by default). AI update/delete requires the last recalled
 revision. Unloading or disabling the plugin stops tool access; reloading
 preserves data. Uninstall follows the host's normal plugin-private-data cleanup

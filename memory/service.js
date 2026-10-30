@@ -18,8 +18,10 @@ function titleText(value) {
     fail("INVALID_INPUT", "Memory title must be at most 200 characters without null bytes.");
   }
   return value.trim();
+  return value.trim();
 }
 
+const PROPOSAL_NOTE = "User memory can only be written by the user. This proposal is now waiting in Enhancements settings and was not saved.";
 function createMemoryService(api) {
   const store = createStore(() => api.plugin.getDataPath());
   let tail = Promise.resolve();
@@ -69,6 +71,7 @@ function createMemoryService(api) {
       settings: { ...data.settings },
       context: { ...bound },
       entries: visibleEntries(data.entries, bound).filter(isActive).map(publicEntry),
+      proposals: data.proposals.map(({ id, title, content, createdAt }) => ({ id, title, content, createdAt })),
       limits: {
         user: limitsFor("user"),
         project: limitsFor("project"),
@@ -182,13 +185,51 @@ function createMemoryService(api) {
     const title = titleText(args.title);
     const duplicate = data.entries.some((entry) => entry.scope === "user" && entry.owner === owner
       && isActive(entry) && entry.content === content);
-    if (duplicate) return { ok: true, duplicate: true, proposal: { title, content, scope: "user" } };
-    return {
-      ok: true,
-      proposed: true,
-      proposal: { title, content, scope: "user" },
-      note: "User memory can only be written by the user. This proposal was returned for confirmation, not saved.",
+    if (duplicate) return { ok: true, duplicate: true };
+    const pending = data.proposals.find((item) => item.content === content);
+    if (pending) return { ok: true, proposed: true, proposal: { ...pending }, note: PROPOSAL_NOTE };
+    if (data.proposals.length >= LIMITS.proposals) {
+      fail("CAPACITY", "Too many unconfirmed proposals. Confirm or dismiss them in settings first.");
+    }
+    const proposal = { id: randomUUID(), title, content, createdAt: new Date().toISOString() };
+    data.proposals.push(proposal);
+    return { ok: true, proposed: true, proposal: { ...proposal }, note: PROPOSAL_NOTE };
+  }
+
+  /**
+   * Turn a pending proposal into a user-level entry. The user is the author, so
+   * the entry is written directly here rather than through `change`, which would
+   * demand a project context the panel may not have.
+   */
+  function acceptProposal(data, args, now) {
+    const index = data.proposals.findIndex((item) => item.id === args.id);
+    if (index < 0) fail("NOT_FOUND", "That proposal is no longer pending.");
+    const proposal = data.proposals[index];
+    const content = contentText(proposal.content, "user");
+    const identical = data.entries.find((entry) => entry.scope === "user" && entry.owner === "local-user"
+      && isActive(entry) && entry.content === content);
+    if (identical) {
+      data.proposals.splice(index, 1);
+      return { ok: true, entry: publicEntry(identical), duplicate: true };
+    }
+    const owned = data.entries.filter((entry) => entry.scope === "user" && entry.owner === "local-user" && isActive(entry));
+    const limits = limitsFor("user");
+    const totalChars = owned.reduce((sum, entry) => sum + entry.content.length, 0);
+    if (owned.length >= limits.entries || totalChars + content.length > limits.totalChars) {
+      fail("CAPACITY", `User memory is full (${limits.entries} entries / ${limits.totalChars} characters).`);
+    }
+    const key = normalizeKey(proposal.title);
+    const entry = {
+      id: randomUUID(), scope: "user", owner: "local-user", title: proposal.title, content,
+      revision: 1, source: "manual", createdAt: now, updatedAt: now,
+      validUntil: null, supersededBy: null,
     };
+    if (key) {
+      for (const stale of owned.filter((item) => normalizeKey(item.title) === key)) supersede(stale, entry.id, now);
+    }
+    data.entries.push(entry);
+    data.proposals.splice(index, 1);
+    return { ok: true, entry: publicEntry(entry) };
   }
 
   return {
@@ -203,6 +244,27 @@ function createMemoryService(api) {
       const bound = await context();
       const data = await store.read();
       data.settings = { ...data.settings, ...partial };
+      await store.write(data, () => guard(bound));
+      return snapshot(data, bound);
+    }),
+    acceptProposal: (args) => serial(async () => {
+      fields(args, ["id", "context"]);
+      const bound = await context();
+      if (args.context !== undefined && !sameContext(args.context, bound)) {
+        fail("CONTEXT_CHANGED", "The selected project changed. Refresh memories before retrying.");
+      }
+      const data = await store.read();
+      acceptProposal(data, args, new Date().toISOString());
+      await store.write(data, () => guard(bound));
+      return snapshot(data, bound);
+    }),
+    rejectProposal: (args) => serial(async () => {
+      fields(args, ["id"]);
+      const bound = await context();
+      const data = await store.read();
+      const index = data.proposals.findIndex((item) => item.id === args.id);
+      if (index < 0) fail("NOT_FOUND", "That proposal is no longer pending.");
+      data.proposals.splice(index, 1);
       await store.write(data, () => guard(bound));
       return snapshot(data, bound);
     }),
@@ -231,8 +293,13 @@ function createMemoryService(api) {
       }
       scopeOwner(args.scope, bound);
       if (!data.settings[`${args.scope}Enabled`]) fail("SCOPE_DISABLED", "This memory level is disabled.");
-      // A user-level write from the assistant is a proposal, never a mutation.
-      if (args.scope === "user" && args.action === "save") return propose(data, args, bound);
+      // A user-level write from the assistant is a proposal: it is stored so the
+      // user can confirm it, but it never becomes an entry on its own.
+      if (args.scope === "user" && args.action === "save") {
+        const proposed = propose(data, args, bound);
+        if (proposed.proposed && !proposed.duplicate) await store.write(data, () => guard(bound, ctx));
+        return proposed;
+      }
       const result = change(data, args, bound, "ai", args.action === "delete");
       await store.write(data, () => guard(bound, ctx));
       return { ok: true, memory: result };

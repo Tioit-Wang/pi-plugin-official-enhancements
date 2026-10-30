@@ -19,6 +19,7 @@ const LIMITS = Object.freeze({
   projectTotalChars: 32 * 1024,
   recallEntries: 20,
   recallChars: 6000,
+  proposals: 20,
   fileBytes: 4 * 1024 * 1024,
 });
 const DEFAULTS = Object.freeze({ enabled: false, userEnabled: true, projectEnabled: true, aiReadEnabled: true, aiWriteEnabled: false });
@@ -86,13 +87,32 @@ function sameContext(left, right) {
 function isActive(entry) {
   return entry.validUntil === null || entry.validUntil === undefined;
 }
+/**
+ * A pending user-level proposal. The assistant may only suggest these; the
+ * panel turns one into an entry. Keeping them in the document means a proposal
+ * survives a reload instead of vanishing with the tool result that carried it.
+ */
+function validateProposals(raw) {
+  if (!Array.isArray(raw.proposals) || raw.proposals.length > LIMITS.proposals) throw new Error("proposals");
+  const ids = new Set();
+  for (const proposal of raw.proposals) {
+    fields(proposal, ["id", "title", "content", "createdAt"]);
+    if (typeof proposal.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(proposal.id) || ids.has(proposal.id)) throw new Error("proposalIdentity");
+    if (contentText(proposal.content, "user") !== proposal.content) throw new Error("proposalContent");
+    if (typeof proposal.title !== "string" || proposal.title.length > 200 || proposal.title.includes("\0")) throw new Error("proposalTitle");
+    if (typeof proposal.createdAt !== "string" || !Number.isFinite(Date.parse(proposal.createdAt))) throw new Error("proposalTimestamp");
+    ids.add(proposal.id);
+  }
+}
+
 function validateDocument(raw) {
   try {
-    fields(raw, ["schemaVersion", "settings", "entries"]);
-    if (raw.schemaVersion !== 2) throw new Error("version");
+    fields(raw, ["schemaVersion", "settings", "entries", "proposals"]);
+    if (raw.schemaVersion !== 3) throw new Error("version");
     settingsPatch(raw.settings);
     if (Object.keys(raw.settings).length !== Object.keys(DEFAULTS).length) throw new Error("settings");
     if (!Array.isArray(raw.entries) || raw.entries.length > LIMITS.userEntries + LIMITS.projectEntries) throw new Error("entries");
+    validateProposals(raw);
     const ids = new Set();
     const counts = new Map();
     for (const entry of raw.entries) {

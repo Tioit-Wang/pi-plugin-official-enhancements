@@ -86,3 +86,26 @@
 .memory-panel .memory-danger, .memory-alert { color: var(--oe-danger); }
 .memory-notice { overflow-wrap: anywhere; }
 .memory-status { color: var(--oe-ink-muted); }
+
+/* Two panes keep the list and the editor from competing for the same column.
+   Each pane scrolls on its own, so a long list cannot push the form away. */
+.memory-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.memory-pane { display: grid; gap: 8px; min-width: 0; }
+.memory-pane-list { max-height: 46vh; overflow-y: auto; padding-right: 4px; }
+.memory-pane-editor { position: sticky; top: 0; }
+.memory-entry { grid-template-columns: minmax(0, 1fr); }
+.memory-entry-open { display: grid; gap: 4px; text-align: left; min-height: 0; padding: 0; border: 0; background: transparent; }
+.memory-entry-open .memory-title { font-weight: 600; }
+.memory-entry-open .memory-content { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.memory-entry-active { border-color: var(--oe-accent); }
+.memory-title { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.memory-proposals { display: grid; gap: 8px; }
+.memory-proposal { border-left: 3px solid var(--oe-accent); }
+
+/* A narrow panel is a real constraint: fall back to one column rather than
+   squeezing both panes until neither is usable. */
+@media (max-width: 720px) {
+  .memory-split { grid-template-columns: minmax(0, 1fr); }
+  .memory-pane-list { max-height: none; }
+  .memory-pane-editor { position: static; }
+}

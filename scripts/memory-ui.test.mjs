@@ -43,6 +43,15 @@ const bridge = {
         entry.content = payload.content; entry.revision += 1;
       } else state.entries.push({ id: "m" + ++counter, scope: payload.scope, content: payload.content, source: "manual", revision: 1, createdAt: "2026-10-30T00:00:00Z", updatedAt: "2026-10-30T00:00:00Z" });
     }
+    if (channel === "memory.acceptProposal") {
+      const proposal = state.proposals.find((item) => item.id === payload.id);
+      assert(proposal, "Accepted proposal must be pending");
+      state.proposals = state.proposals.filter((item) => item.id !== payload.id);
+      state.entries.push({ id: "m" + ++counter, scope: "user", title: proposal.title, content: proposal.content, source: "manual", revision: 1, createdAt: "2026-10-30T00:00:00Z", updatedAt: "2026-10-30T00:00:00Z", validUntil: null, supersededBy: null });
+    }
+    if (channel === "memory.rejectProposal") {
+      state.proposals = state.proposals.filter((item) => item.id !== payload.id);
+    }
     if (channel === "memory.delete") {
       const entry = state.entries.find((entry) => entry.id === payload.id);
       assert(entry.revision === payload.expectedRevision, "Delete must carry revision");
@@ -103,6 +112,16 @@ const run = async () => {
   await click("删除");
   await click("确认删除");
   assert(state.entries.length === 0 && text().includes("记忆已删除"), "Confirmed delete updates the list");
+
+  // A pending proposal is visible, actionable, and does not count as an entry.
+  state.proposals = [{ id: "p1", title: "称呼", content: "叫我王哥", createdAt: "2026-10-30T00:00:00Z" }];
+  await click("刷新");
+  assert(text().includes("叫我王哥"), "A pending proposal is shown");
+  await click("保存");
+  assert(state.entries.some((entry) => entry.content === "叫我王哥"), "Accepting a proposal stores it");
+  assert(state.proposals.length === 0, "An accepted proposal leaves the queue");
+  await setValue(input("级别"), "user");
+  assert(text().includes("叫我王哥"), "The accepted entry appears in the list");
 
   await setValue(input("级别"), "project");
   assert(text().includes("Project One"), "Project ownership is visible");
