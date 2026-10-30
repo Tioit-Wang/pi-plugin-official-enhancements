@@ -40,8 +40,9 @@ async function buildView() {
   // is inlined next to the script.
   const css = readFileSync(join(here, "dist/view.css"), "utf8");
   const html = readFileSync(join(here, "src/view/index.html"), "utf8")
-    .replace("<!--VIEW_STYLE-->", css)
-    .replace("<!--VIEW_SCRIPT-->", js);
+    // Replacer functions preserve literal $&, $$, and other bundle tokens.
+    .replace("<!--VIEW_STYLE-->", () => css)
+    .replace("<!--VIEW_SCRIPT-->", () => js);
   mkdirSync(join(here, "views"), { recursive: true });
   writeFileSync(join(here, "views/index.html"), html, "utf8");
   return { bytes: html.length, file: "views/index.html" };

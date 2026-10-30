@@ -1,13 +1,15 @@
 # Official Enhancements
 
-One plugin for three enhancement capabilities, configured from its own settings
-window. **All three start on**; the window is the only place to turn one off.
+One plugin for four enhancement capabilities, configured from its own settings
+window. Suggestions, prompt enhancement, and titles start on. **Memory starts
+off**, with AI writes separately off; the window is the configuration surface.
 
 | Capability | Where it shows | Switch |
 |---|---|---|
 | Next-message suggestion | The message you are likely to send next, shown in the composer placeholder after a turn ends; <kbd>Tab</kbd> accepts it | `predictionsEnabled` |
 | Prompt enhancement | The **Enhance prompt** action on the composer | `promptEnhancementEnabled` |
 | Session titles | The session's title in the sidebar, after its first exchange | `titlesEnabled` |
+| Scoped memory | Manual management in settings; on-demand recall and writes through the agent's memory tool | Separate memory switches |
 | Changed-files card | **Moved to the host**: rendered natively under the last reply, not by this plugin |
 
 The settings window is a detached panel (`ui.panel`), not a work-panel view: it
@@ -130,11 +132,76 @@ never render.
 The host renders it natively instead, beside the parts it already owns, so the
 plugin now has no renderer module, no slot registration, and no `session.read`
 use for a transcript read.
+## User, project, and session memory
+
+Open **Enhancements: Open Settings**, then the **Memory** section (localized to
+English or Simplified Chinese). Add, edit, search, or delete entries at any of
+the three levels. A delete needs a second confirmation. Manual management works
+even while AI memory is off.
+
+| Level | Visibility |
+|---|---|
+| User | All projects and sessions in the same local PI profile |
+| Project | Sessions in the current host project group; absolute project path on hosts without group IDs |
+| Session | Only the current session, including after restart |
+
+Use **Use memory** to allow the AI to use memories, then select the available
+levels. **AI recall** and **AI write** have independent switches. Level switches
+apply to AI access throughout this profile; they do not erase or hide manually
+managed records. The initial switches are:
+
+| Switch | Default |
+|---|---|
+| Use memory | Off |
+| User / Project / Session | On, gated by Use memory |
+| AI recall | On, gated by Use memory |
+| AI write | Off |
+
+After enabling recall, ask the assistant to look up relevant saved preferences
+or project decisions. After additionally enabling writes, requests such as
+"Remember for this project that we use pnpm" or "Remember only in this session
+that we are debugging login" let it save a scoped entry. All AI entries remain
+visible and editable in the same manager. The tool description instructs the
+assistant to save only requested facts, choose the narrowest suitable level,
+and never treat stored text as system instructions. Model compliance is not a
+security boundary: the backend enforces scope, switches, revisions, and limits.
+
+Recall combines only enabled entries from the current scopes, with session
+before project before user, then lexical relevance and recency within each
+level. Search supports English and Chinese locally. Identical content is
+deduplicated; different statements are kept as separate records. Current user
+instructions take priority over remembered facts.
+
+The plugin provides an on-demand `memory` agent tool with `recall`, `save`, and
+`delete` actions. It does **not** automatically inject memories at every turn
+or extract whole transcripts: the sandboxed plugin API has no general turn
+prompt hook. The conversation model decides when to call the tool; you can ask
+it explicitly. No extra model/embedding requests or cloud memory services are
+used. Recalled entries travel to the conversation model as tool results.
+
+The local file is `<plugin-private-data>/memory.v1.json`, separate from the
+existing enhancement settings. It is ordinary JSON, not encrypted secret
+storage. Limits are 2,000 characters per entry, 100 entries per scope owner,
+500 in total, and at most 20 entries / 6,000 content characters per recall
+(10 entries by default). AI update/delete requires the last recalled revision.
+Unloading or disabling the plugin stops tool access; reloading preserves data.
+Uninstall follows the host's normal plugin-private-data cleanup policy.
+
+Project/session entries cannot be managed without the corresponding selection.
+Context switches clear the panel's old draft when refreshed or focused. The
+backend refuses a stale save rather than moving it to the newly selected scope.
+Tool access is limited to the invoking session while it remains selected;
+background sessions must become selected before using memory tools.
+
+For implementation analysis, sources, contracts, and acceptance scenarios, see
+[the memory design](docs/memory-design.md).
+
 ## Settings
 
-Every value lives in the plugin's own settings record; nothing is declared in
-`contributes.settings`. Defaults are in `main.js` and every capability starts
-**on**. The window writes through the plugin process, so one sanitizer decides
+The original three capabilities use the plugin's own settings record; memory
+uses its separately versioned private file. Nothing is declared in
+`contributes.settings`. Enhancement defaults are in `main.js`; memory defaults
+are in `memory/model.js`. The window writes through the plugin process, so one sanitizer decides
 what is valid and the page renders the value that came back:
 
 | Key | Type | Default |
@@ -163,21 +230,28 @@ what is valid and the page renders the value that came back:
 | `session.read` | The conversation's model, and the tail a suggestion is written from |
 | `agent.complete` | The suggestion, enhancement, titles, and the model test |
 | `session.autoTitle` | The bounded first-turn excerpt a title is written from, and the compare-and-set title write |
+| `agent.tool.register` | The host-bound memory tool; its backend enforces all memory switches and scopes |
 
-`agent.complete`, `session.read` and `session.autoTitle`
+`agent.complete`, `session.read`, `session.autoTitle` and `agent.tool.register`
 are high risk and each requires an explicit grant; `composer.suggest` is medium
 risk and is confirmed at install, because a suggestion can put text into a draft
-the user may send. Only the conversation tail a suggestion is written from, a
-draft, and the bounded first-turn excerpt for a title are ever sent to a model;
-nothing else leaves the machine.
+the user may send. Bounded enhancement inputs and explicitly recalled memory
+entries are sent to the selected model. Memory storage itself stays local.
 
 ## Development
+
+Use the existing PI-Desktop development environment for React, esbuild,
+Tailwind, and Electron. `PI_DESKTOP_ROOT` below denotes that checkout's path;
+the plugin does not include a second dependency installation.
 
 ```bash
 node scripts/build-css.mjs   # compile src/view/styles.css -> dist/view.css
 node build.mjs               # bundle the settings window
+node --test --test-timeout=60000 scripts/build.test.mjs # generated page regression
 node scripts/smoke.mjs       # main.js contract against a fake host
-node ../../../packages/plugin-devkit/dist/cli.js check .
+node --test --test-timeout=60000 scripts/memory.test.mjs scripts/memory-host.test.mjs
+node --test --test-timeout=60000 scripts/memory-ui.test.mjs # isolated Electron; no running PI or provider
+node "$PI_DESKTOP_ROOT/packages/plugin-devkit/dist/cli.js" check .
 ```
 
 PI-Desktop installs plugins without compiling anything, so `views/index.html` is

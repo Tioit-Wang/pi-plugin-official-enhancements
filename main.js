@@ -1,22 +1,22 @@
 /**
  * Official Enhancements (`pi.official-enhancements`) — plugin process.
  *
- * Three capabilities, one plugin and one configuration view:
- *
- * 1. composer predictions — a phrase-driven completion of the current draft.
- *    The renderer draws the hint and applies it with `composer.insertText`; the
- *    phrases and the switch live here so the view owns the configuration.
- * 2. prompt enhancement — a declared `composerTransforms` action. The host
- *    hands it the draft alone and grants the transform budget, so this is the
- *    one place a model call may be awaited.
- * 3. changed-files card — the files one reply touched, computed from the
- *    session's own tool messages and drawn by the `entryExtra` slot.
- *
- * `onRendererCall` is bounded at 2s per call, so it only reads settings and
- * computes the file list; nothing there waits on a provider.
+ * Composer suggestions, prompt enhancement, session titles, and optional
+ * scoped memory. Memory has its own bounded persistence and lifecycle service;
+ * this entry point only wires it to the existing panel and host tool API.
  */
 
 "use strict";
+
+const { createMemoryService } = require("./memory/service.js");
+const memoryDescriptor = require("./manifest.json").contributes.agentTools.find((tool) => tool.name === "memory");
+let memoryService = null;
+let memoryToolAvailable = false;
+
+function memory() {
+  if (!memoryService) throw Object.assign(new Error("Memory is unavailable. Reload the plugin."), { code: "MEMORY_UNAVAILABLE" });
+  return memoryService;
+}
 
 /** Longest suggestion kept; the placeholder shows one line and ellipsizes. */
 const SUGGESTION_MAX_CHARS = 120;
@@ -732,7 +732,7 @@ function runTitleForTurn(payload) {
  * sanitizer silently drops — which is exactly what a switch that flips back on
  * its own looks like.
  */
-const STATE_API_VERSION = 2;
+const STATE_API_VERSION = 3;
 
 /**
  * Everything the view and the renderer slots need to draw their controls.
@@ -807,6 +807,10 @@ async function onRendererCall(method, args) {
  * check a model and run the enhancement by hand.
  */
 const PANEL_CHANNELS = {
+  "memory.state": async () => ({ ...await memory().state(), toolAvailable: memoryToolAvailable }),
+  "memory.settings": async (payload) => ({ ...await memory().updateSettings(payload?.partial), toolAvailable: memoryToolAvailable }),
+  "memory.save": async (payload) => ({ ...await memory().save(payload), toolAvailable: memoryToolAvailable }),
+  "memory.delete": async (payload) => ({ ...await memory().remove(payload), toolAvailable: memoryToolAvailable }),
   "enhancements.panelState": () => state(),
   "enhancements.saveSettings": async (payload) => {
     const saved = await writeSettings(payload ?? {});
@@ -890,6 +894,17 @@ async function registerCommands() {
  * spending completions.
  */
 async function onLoad() {
+  await memoryService?.dispose();
+  const loadedMemory = createMemoryService(pi);
+  memoryService = loadedMemory;
+  memoryToolAvailable = false;
+  try {
+    await pi.agent.registerTool({ ...memoryDescriptor, execute: (args, ctx) => loadedMemory.execute(args, ctx) });
+    memoryToolAvailable = true;
+  } catch {
+    // A missing tool grant must not disable the three existing enhancements.
+    console.error("[official-enhancements] memory tool unavailable; reload with agent.tool.register granted");
+  }
   cachedSettings = null;
   suggestedTurns.clear();
   lastSuggestionFailure = "";
@@ -921,6 +936,15 @@ function onSessionTurnEnded(payload) {
   return Promise.all([runTitleForTurn(payload), runSuggestionForTurn(payload)]);
 }
 async function onUnload() {
+  const closingMemory = memoryService;
+  memoryService = null;
+  memoryToolAvailable = false;
+  await closingMemory?.dispose();
+  try {
+    await pi.agent.unregisterTool?.("memory");
+  } catch {
+    console.error("[official-enhancements] memory tool cleanup failed");
+  }
   suggestedTurns.clear();
   titledTurns.clear();
   titlesInFlight.clear();
